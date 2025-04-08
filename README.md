@@ -1,3 +1,20 @@
+# Endure Project with Differential Privacy
+
+This project implements a differential privacy framework for database workload tuning using RocksDB and Endure. The system allows for private database tuning by perturbing workload characteristics while maintaining utility.
+
+## Project Structure
+
+```
+endure_final_project/
+├── endure/
+│   ├── workload_generator.py    # Generates original and private workloads
+│   ├── endure_integration.py    # Integrates with Endure tuning framework
+│   ├── privacy_analysis.py      # Analyzes privacy-utility tradeoffs
+│   ├── performance_analysis.py  # Measures performance impacts
+│   └── rocksdb_config.py       # RocksDB configuration templates
+└── experiments/
+    └── run_experiments.slurm    # Slurm job script for SCC
+```
 
 ## Setup Instructions
 
@@ -119,10 +136,13 @@ Potential areas for extension:
    - Automated parameter tuning
    - Extended metrics collection
 
+## Contact
 
+For questions or issues, please contact:
+- Project maintainer: asiannah@bu.edu
+- Original author: asiannah
 
 ## License
 
-MIT Licence
+MIT License
 
-EOL
