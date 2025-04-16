@@ -1,0 +1,250 @@
+{
+  "0.1": [
+    {
+      "original_config": {
+        "throughput": 1063.041097597186,
+        "latency": 10.981703013615663,
+        "space_amplification": 1.4385152672377193
+      },
+      "private_config": {
+        "throughput": 757.6303133845529,
+        "latency": 10.341421927214489,
+        "space_amplification": 1.6787937374291948
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1038.0299517141032,
+        "latency": 9.816486152575607,
+        "space_amplification": 1.574939375501753
+      },
+      "private_config": {
+        "throughput": 952.7963710487232,
+        "latency": 12.13266169960813,
+        "space_amplification": 1.6344786936055309
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 887.3254422550247,
+        "latency": 9.826812250312878,
+        "space_amplification": 1.364669379708264
+      },
+      "private_config": {
+        "throughput": 1028.7127772793276,
+        "latency": 11.498902168194197,
+        "space_amplification": 1.3766022747581592
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1272.902044440991,
+        "latency": 9.818211745766465,
+        "space_amplification": 1.4829295884405806
+      },
+      "private_config": {
+        "throughput": 965.4964268152936,
+        "latency": 11.180153247765395,
+        "space_amplification": 1.7596817067917796
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1096.7777182760697,
+        "latency": 9.080373763485643,
+        "space_amplification": 1.39420541828344
+      },
+      "private_config": {
+        "throughput": 1090.9516377118869,
+        "latency": 10.607601127250357,
+        "space_amplification": 1.5684409914056106
+      }
+    }
+  ],
+  "0.5": [
+    {
+      "original_config": {
+        "throughput": 910.5919372659625,
+        "latency": 10.422249889846922,
+        "space_amplification": 1.4123204090493653
+      },
+      "private_config": {
+        "throughput": 1063.2323557424447,
+        "latency": 10.094068494960561,
+        "space_amplification": 1.6408672499245334
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1035.342793209997,
+        "latency": 9.384077394433678,
+        "space_amplification": 1.5709151458101513
+      },
+      "private_config": {
+        "throughput": 953.6968243258088,
+        "latency": 12.022060194546189,
+        "space_amplification": 1.672151460367138
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 885.2950204757872,
+        "latency": 10.082722609041419,
+        "space_amplification": 1.54976024316069
+      },
+      "private_config": {
+        "throughput": 933.8938716512719,
+        "latency": 10.810596993740445,
+        "space_amplification": 1.7347350381474544
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 899.7519426447313,
+        "latency": 7.9073193740043095,
+        "space_amplification": 1.642754897929969
+      },
+      "private_config": {
+        "throughput": 894.6337760247102,
+        "latency": 11.058066184530295,
+        "space_amplification": 1.4872745282910045
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 935.233208183057,
+        "latency": 9.025403275196485,
+        "space_amplification": 1.3880894253987566
+      },
+      "private_config": {
+        "throughput": 930.173743698855,
+        "latency": 10.036289497490035,
+        "space_amplification": 1.6075911254844337
+      }
+    }
+  ],
+  "1.0": [
+    {
+      "original_config": {
+        "throughput": 976.4417678677554,
+        "latency": 10.215904435943244,
+        "space_amplification": 1.6139433650204411
+      },
+      "private_config": {
+        "throughput": 874.4043705997417,
+        "latency": 12.084010126547614,
+        "space_amplification": 1.7328354160843553
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 869.7329481895916,
+        "latency": 9.566993572986625,
+        "space_amplification": 1.7427131314257094
+      },
+      "private_config": {
+        "throughput": 773.5749887716999,
+        "latency": 12.119638287739313,
+        "space_amplification": 1.668400831396839
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 963.3910646059959,
+        "latency": 9.304196743373517,
+        "space_amplification": 1.4869551661818932
+      },
+      "private_config": {
+        "throughput": 928.8599193897228,
+        "latency": 10.798557617044079,
+        "space_amplification": 1.570775566438341
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 938.3252487719642,
+        "latency": 12.053718395513979,
+        "space_amplification": 1.429813116504001
+      },
+      "private_config": {
+        "throughput": 918.1556838380545,
+        "latency": 13.575557638673475,
+        "space_amplification": 1.8792386208323546
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 737.1325595372202,
+        "latency": 10.988676866394785,
+        "space_amplification": 1.251479414657457
+      },
+      "private_config": {
+        "throughput": 998.1397849453763,
+        "latency": 11.161289762044472,
+        "space_amplification": 1.523966567418899
+      }
+    }
+  ],
+  "2.0": [
+    {
+      "original_config": {
+        "throughput": 1055.0601877048946,
+        "latency": 10.614796202016908,
+        "space_amplification": 1.4215778039828768
+      },
+      "private_config": {
+        "throughput": 913.9560014790246,
+        "latency": 11.6008831360855,
+        "space_amplification": 1.7902202385787902
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1072.6284650164455,
+        "latency": 9.242163445958452,
+        "space_amplification": 1.7050832891056127
+      },
+      "private_config": {
+        "throughput": 1179.6995984487623,
+        "latency": 11.984666718891491,
+        "space_amplification": 1.4492897260613773
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1102.9135884098146,
+        "latency": 8.991412587801541,
+        "space_amplification": 1.743503163026677
+      },
+      "private_config": {
+        "throughput": 937.2491896145071,
+        "latency": 9.221235282475096,
+        "space_amplification": 1.4487171109726402
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1024.9817084134386,
+        "latency": 9.919164554959579,
+        "space_amplification": 1.5181127167830346
+      },
+      "private_config": {
+        "throughput": 1037.054436282049,
+        "latency": 10.845532523777063,
+        "space_amplification": 1.6369104281636966
+      }
+    },
+    {
+      "original_config": {
+        "throughput": 1061.3098067609312,
+        "latency": 9.158511541398044,
+        "space_amplification": 1.4506843140853978
+      },
+      "private_config": {
+        "throughput": 1070.5460441866041,
+        "latency": 9.775176517920405,
+        "space_amplification": 1.6367741333437338
+      }
+    }
+  ]
+}
