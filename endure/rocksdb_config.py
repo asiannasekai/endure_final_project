@@ -11,28 +11,32 @@ class RocksDBConfig:
     error_if_exists: bool = False
     
     # Performance tuning
-    max_background_jobs: int = 4
-    max_subcompactions: int = 1
+    max_background_jobs: int = 8
+    max_subcompactions: int = 4
     max_open_files: int = -1  # -1 means unlimited
     
     # Memtable settings
-    write_buffer_size: int = 64 * 1024 * 1024  # 64MB
-    max_write_buffer_number: int = 3
+    write_buffer_size: int = 128 * 1024 * 1024  # 128MB
+    max_write_buffer_number: int = 6
     min_write_buffer_number_to_merge: int = 1
     
     # Level style compaction
-    level0_file_num_compaction_trigger: int = 4
-    level0_slowdown_writes_trigger: int = 20
+    level0_file_num_compaction_trigger: int = 8
+    level0_slowdown_writes_trigger: int = 32
     level0_stop_writes_trigger: int = 36
     max_bytes_for_level_base: int = 256 * 1024 * 1024  # 256MB
     target_file_size_base: int = 64 * 1024 * 1024  # 64MB
     
     # Compression
-    compression_type: str = "snappy"  # Options: "none", "snappy", "zlib", "bzip2", "lz4", "lz4hc", "xpress", "zstd"
+    compression_type: str = "lz4"
     
-    # Bloom filter
-    optimize_filters_for_hits: bool = False
-    bloom_locality: int = 0
+    # Cache settings
+    block_cache_size: int = 8 * 1024 * 1024 * 1024  # 8GB
+    optimize_filters_for_hits: bool = True
+    bloom_locality: int = 1
+    
+    # Batch processing
+    batch_size: int = 1000
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary format for RocksDB options."""
@@ -52,7 +56,9 @@ class RocksDBConfig:
             "target_file_size_base": self.target_file_size_base,
             "compression_type": self.compression_type,
             "optimize_filters_for_hits": self.optimize_filters_for_hits,
-            "bloom_locality": self.bloom_locality
+            "bloom_locality": self.bloom_locality,
+            "block_cache_size": self.block_cache_size,
+            "batch_size": self.batch_size
         }
 
     def save(self, filename: str) -> None:
@@ -68,20 +74,22 @@ class RocksDBConfig:
             self.db_path = config_dict.get("db_path", "rocksdb_data")
             self.create_if_missing = config_dict.get("create_if_missing", True)
             self.error_if_exists = config_dict.get("error_if_exists", False)
-            self.max_background_jobs = config_dict.get("max_background_jobs", 4)
-            self.max_subcompactions = config_dict.get("max_subcompactions", 1)
+            self.max_background_jobs = config_dict.get("max_background_jobs", 8)
+            self.max_subcompactions = config_dict.get("max_subcompactions", 4)
             self.max_open_files = config_dict.get("max_open_files", -1)
-            self.write_buffer_size = config_dict.get("write_buffer_size", 64 * 1024 * 1024)
-            self.max_write_buffer_number = config_dict.get("max_write_buffer_number", 3)
+            self.write_buffer_size = config_dict.get("write_buffer_size", 128 * 1024 * 1024)
+            self.max_write_buffer_number = config_dict.get("max_write_buffer_number", 6)
             self.min_write_buffer_number_to_merge = config_dict.get("min_write_buffer_number_to_merge", 1)
-            self.level0_file_num_compaction_trigger = config_dict.get("level0_file_num_compaction_trigger", 4)
-            self.level0_slowdown_writes_trigger = config_dict.get("level0_slowdown_writes_trigger", 20)
+            self.level0_file_num_compaction_trigger = config_dict.get("level0_file_num_compaction_trigger", 8)
+            self.level0_slowdown_writes_trigger = config_dict.get("level0_slowdown_writes_trigger", 32)
             self.level0_stop_writes_trigger = config_dict.get("level0_stop_writes_trigger", 36)
             self.max_bytes_for_level_base = config_dict.get("max_bytes_for_level_base", 256 * 1024 * 1024)
             self.target_file_size_base = config_dict.get("target_file_size_base", 64 * 1024 * 1024)
-            self.compression_type = config_dict.get("compression_type", "snappy")
-            self.optimize_filters_for_hits = config_dict.get("optimize_filters_for_hits", False)
-            self.bloom_locality = config_dict.get("bloom_locality", 0)
+            self.compression_type = config_dict.get("compression_type", "lz4")
+            self.optimize_filters_for_hits = config_dict.get("optimize_filters_for_hits", True)
+            self.bloom_locality = config_dict.get("bloom_locality", 1)
+            self.block_cache_size = config_dict.get("block_cache_size", 8 * 1024 * 1024 * 1024)
+            self.batch_size = config_dict.get("batch_size", 1000)
 
     def get_config(self) -> Dict[str, Any]:
         """Get the current configuration."""

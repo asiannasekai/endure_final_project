@@ -17,6 +17,17 @@ class WorkloadGenerator:
     def __init__(self, epsilon: float = 1.0):
         """Initialize workload generator with privacy parameter epsilon."""
         self.epsilon = epsilon
+        self.batch_size = 1000
+
+    def get_adaptive_epsilon(self, characteristics: WorkloadCharacteristics) -> float:
+        """Get adaptive epsilon based on workload characteristics."""
+        base_epsilon = self.epsilon
+        # Adjust epsilon based on workload patterns
+        if characteristics.hot_key_ratio > 0.3:
+            return base_epsilon * 1.5
+        if characteristics.read_ratio > 0.8:
+            return base_epsilon * 1.2
+        return base_epsilon
 
     def generate_workload(self, characteristics: WorkloadCharacteristics) -> Tuple[List[Dict], List[Dict]]:
         """Generate both original and differentially private workloads."""
@@ -29,51 +40,60 @@ class WorkloadGenerator:
         return original_workload, private_workload
 
     def _generate_workload_internal(self, characteristics: WorkloadCharacteristics) -> List[Dict]:
-        """Generate the original workload."""
+        """Generate the original workload with batch processing."""
         workload = []
         total_ops = characteristics.operation_count
         
         # Generate hot keys
         hot_keys = [f"hot_key_{i}" for i in range(characteristics.hot_key_count)]
         
-        # Generate operations
-        for i in range(total_ops):
-            # Determine if operation is read or write
-            is_read = np.random.random() < characteristics.read_ratio
+        # Generate operations in batches
+        for batch_start in range(0, total_ops, self.batch_size):
+            batch_end = min(batch_start + self.batch_size, total_ops)
+            batch = []
             
-            # Determine if operation is on hot key
-            is_hot = np.random.random() < characteristics.hot_key_ratio
+            for i in range(batch_start, batch_end):
+                # Determine if operation is read or write
+                is_read = np.random.random() < characteristics.read_ratio
+                
+                # Determine if operation is on hot key
+                is_hot = np.random.random() < characteristics.hot_key_ratio
+                
+                if is_hot:
+                    key = np.random.choice(hot_keys)
+                else:
+                    key = f"key_{i}"
+                
+                operation = {
+                    "type": "read" if is_read else "write",
+                    "key": key,
+                    "value": "x" * characteristics.value_size if not is_read else None,
+                    "is_hot": is_hot
+                }
+                batch.append(operation)
             
-            if is_hot:
-                key = np.random.choice(hot_keys)
-            else:
-                key = f"key_{i}"
-            
-            operation = {
-                "type": "read" if is_read else "write",
-                "key": key,
-                "value": "x" * characteristics.value_size if not is_read else None,
-                "is_hot": is_hot
-            }
-            workload.append(operation)
+            workload.extend(batch)
         
         return workload
 
     def _add_differential_privacy(self, workload: List[Dict], 
                                 characteristics: WorkloadCharacteristics) -> List[Dict]:
-        """Add differential privacy to the workload."""
+        """Add differential privacy to the workload with adaptive noise."""
+        # Calculate adaptive epsilon
+        adaptive_epsilon = self.get_adaptive_epsilon(characteristics)
+        
         # Calculate sensitivity for each characteristic
-        read_ratio_sensitivity = 1.0 / characteristics.operation_count
-        write_ratio_sensitivity = 1.0 / characteristics.operation_count
+        read_sensitivity = 0.5 / characteristics.operation_count  # Lower sensitivity for reads
+        write_sensitivity = 1.0 / characteristics.operation_count
         hot_key_ratio_sensitivity = 1.0 / characteristics.operation_count
         
-        # Add Laplace noise to ratios
+        # Add Laplace noise to ratios with different sensitivities
         noisy_read_ratio = characteristics.read_ratio + np.random.laplace(
-            0, read_ratio_sensitivity / self.epsilon)
+            0, read_sensitivity / adaptive_epsilon)
         noisy_write_ratio = characteristics.write_ratio + np.random.laplace(
-            0, write_ratio_sensitivity / self.epsilon)
+            0, write_sensitivity / adaptive_epsilon)
         noisy_hot_key_ratio = characteristics.hot_key_ratio + np.random.laplace(
-            0, hot_key_ratio_sensitivity / self.epsilon)
+            0, hot_key_ratio_sensitivity / adaptive_epsilon)
         
         # Ensure ratios are valid
         noisy_read_ratio = max(0, min(1, noisy_read_ratio))
