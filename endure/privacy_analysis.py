@@ -11,6 +11,38 @@ class PrivacyAnalysis:
         self.results_dir = "privacy_results"
         os.makedirs(self.results_dir, exist_ok=True)
 
+    def _validate_results(self, results: Dict) -> bool:
+        """Validate the results of the privacy analysis."""
+        try:
+            # Check if results is a dictionary
+            if not isinstance(results, dict):
+                return False
+            
+            # Check each epsilon entry
+            for epsilon, trials in results.items():
+                if not isinstance(epsilon, (int, float)):
+                    return False
+                if not isinstance(trials, list):
+                    return False
+                
+                # Check each trial
+                for trial in trials:
+                    if not isinstance(trial, dict):
+                        return False
+                    if "comparison" not in trial or "privacy_metrics" not in trial:
+                        return False
+                    
+                    # Check privacy metrics
+                    metrics = trial["privacy_metrics"]
+                    if not isinstance(metrics, dict):
+                        return False
+                    if "configuration_difference" not in metrics or "performance_difference" not in metrics:
+                        return False
+            
+            return True
+        except Exception:
+            return False
+
     def run_privacy_sweep(self, characteristics: WorkloadCharacteristics,
                          epsilons: List[float] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
                          num_trials: int = 10) -> Dict:

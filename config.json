@@ -8,7 +8,7 @@
     },
     "visualization": {
         "style": "whitegrid",
-        "figure_size": "(12, 8)",
+        "figure_size": [12, 8],
         "font_size": 12,
         "color_palette": "husl",
         "dpi": 300,
