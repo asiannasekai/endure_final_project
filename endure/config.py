@@ -199,6 +199,11 @@ class ConfigManager:
         """
         for key, value in config_data.items():
             if hasattr(config_obj, key):
+                # Convert lists to tuples for specific fields
+                if key == "epsilon_range" and isinstance(value, list):
+                    value = tuple(value)
+                elif key == "metrics" and isinstance(value, list):
+                    value = tuple(value)
                 setattr(config_obj, key, value)
     
     def get_config(self) -> Dict[str, Any]:
