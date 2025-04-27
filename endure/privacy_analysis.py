@@ -455,6 +455,41 @@ class PrivacyAnalysis:
             logger.error(f"Error analyzing workload patterns: {str(e)}")
             return {}
 
+    def load_results(self) -> Dict[float, List]:
+        """Load results from file with proper type conversion for epsilon values."""
+        try:
+            results_path = os.path.join(self.results_dir, "privacy_analysis_results.json")
+            if not os.path.exists(results_path):
+                logger.error(f"Results file not found: {results_path}")
+                return {}
+
+            with open(results_path, 'r') as f:
+                raw_results = json.load(f)
+
+            # Convert string epsilon keys to float and validate
+            results = {}
+            for eps_str, trials in raw_results.items():
+                try:
+                    epsilon = float(eps_str)
+                    if not isinstance(epsilon, (int, float)) or epsilon <= 0:
+                        logger.warning(f"Invalid epsilon value: {eps_str}")
+                        continue
+                    results[epsilon] = trials
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error converting epsilon value {eps_str}: {str(e)}")
+                    continue
+
+            # Validate the converted results
+            if not self._validate_results(results):
+                logger.error("Loaded results failed validation")
+                return {}
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error loading results: {str(e)}")
+            return {}
+
 def main():
     # Example workload characteristics
     characteristics = WorkloadCharacteristics(

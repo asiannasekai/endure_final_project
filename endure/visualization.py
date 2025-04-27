@@ -109,15 +109,123 @@ class EnhancedVisualization:
             logger.error(f"Error saving figure {filename}: {str(e)}")
             raise
     
-    def plot_privacy_performance_tradeoff(self, results: Dict) -> None:
-        """Plot privacy-performance tradeoff with detailed insights."""
+    def _validate_results_structure(self, results: Dict[float, List]) -> bool:
+        """Validate the structure of results data with detailed error messages."""
         try:
-            # Extract epsilon values and their corresponding metrics
-            epsilons = sorted(results.keys())
-            if not epsilons:
+            if not isinstance(results, dict):
+                logger.error("Results must be a dictionary")
+                return False
+
+            if not results:
+                logger.error("Results dictionary is empty")
+                return False
+
+            for epsilon, trials in results.items():
+                # Validate epsilon value
+                if not isinstance(epsilon, (int, float)):
+                    logger.error(f"Invalid epsilon value type: {type(epsilon)}. Expected float or int.")
+                    return False
+                if epsilon <= 0:
+                    logger.error(f"Invalid epsilon value: {epsilon}. Must be positive.")
+                    return False
+
+                # Validate trials list
+                if not isinstance(trials, list):
+                    logger.error(f"Invalid trials type for epsilon {epsilon}: {type(trials)}. Expected list.")
+                    return False
+                if not trials:
+                    logger.warning(f"No trials found for epsilon {epsilon}")
+                    continue
+
+                # Validate each trial
+                for i, trial in enumerate(trials):
+                    if not isinstance(trial, dict):
+                        logger.error(f"Invalid trial type at index {i} for epsilon {epsilon}: {type(trial)}. Expected dictionary.")
+                        return False
+
+                    # Validate required fields
+                    required_fields = ['privacy_metrics', 'workload_characteristics']
+                    for field in required_fields:
+                        if field not in trial:
+                            logger.error(f"Missing required field '{field}' in trial {i} for epsilon {epsilon}")
+                            return False
+                        if not isinstance(trial[field], dict):
+                            logger.error(f"Invalid type for '{field}' in trial {i} for epsilon {epsilon}. Expected dictionary, got {type(trial[field])}")
+                            return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Error validating results structure: {str(e)}")
+            return False
+
+    def _validate_trial_data(self, trial: Dict, epsilon: float, trial_index: int) -> bool:
+        """Validate individual trial data structure with detailed error messages."""
+        try:
+            # Validate privacy metrics
+            privacy_metrics = trial.get('privacy_metrics', {})
+            required_metrics = {
+                'performance_differences': dict,
+                'configuration_differences': dict,
+                'privacy_utility_score': dict
+            }
+
+            for metric, expected_type in required_metrics.items():
+                if metric not in privacy_metrics:
+                    logger.error(f"Missing required metric '{metric}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+                if not isinstance(privacy_metrics[metric], expected_type):
+                    logger.error(f"Invalid type for '{metric}' in trial {trial_index} for epsilon {epsilon}. Expected {expected_type}, got {type(privacy_metrics[metric])}")
+                    return False
+
+            # Validate performance differences
+            perf_diffs = privacy_metrics.get('performance_differences', {})
+            for metric, diff in perf_diffs.items():
+                if not isinstance(diff, dict):
+                    logger.error(f"Invalid performance difference format for '{metric}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+                if 'difference_percent' not in diff:
+                    logger.error(f"Missing 'difference_percent' in performance difference for '{metric}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+                if not isinstance(diff['difference_percent'], (int, float)):
+                    logger.error(f"Invalid type for 'difference_percent' in '{metric}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+
+            # Validate configuration differences
+            config_diffs = privacy_metrics.get('configuration_differences', {})
+            for param, diff in config_diffs.items():
+                if not isinstance(diff, dict):
+                    logger.error(f"Invalid configuration difference format for parameter '{param}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+                if 'difference_percent' not in diff:
+                    logger.error(f"Missing 'difference_percent' in configuration difference for '{param}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+                if not isinstance(diff['difference_percent'], (int, float)):
+                    logger.error(f"Invalid type for 'difference_percent' in parameter '{param}' in trial {trial_index} for epsilon {epsilon}")
+                    return False
+
+            # Validate workload characteristics
+            workload_chars = trial.get('workload_characteristics', {})
+            for char, value in workload_chars.items():
+                if not isinstance(value, (int, float)):
+                    logger.error(f"Invalid type for workload characteristic '{char}' in trial {trial_index} for epsilon {epsilon}. Expected numeric, got {type(value)}")
+                    return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Error validating trial {trial_index} data for epsilon {epsilon}: {str(e)}")
+            return False
+
+    def plot_privacy_performance_tradeoff(self, results: Dict[float, List]) -> None:
+        """Plot privacy-performance tradeoff with detailed insights and validation."""
+        try:
+            if not results:
                 logger.error("No results to plot")
                 return
-            
+
+            if not self._validate_results_structure(results):
+                logger.error("Invalid results structure for privacy-performance tradeoff plot")
+                return
+
             # Create figure with subplots
             fig = plt.figure(figsize=(20, 15))
             gs = fig.add_gridspec(3, 2)
@@ -130,21 +238,34 @@ class EnhancedVisualization:
                 'space_amplification': []
             }
             
+            epsilons = sorted(results.keys())
             for epsilon in epsilons:
                 trials = results[epsilon]
                 if not trials:
+                    logger.warning(f"No trials found for epsilon {epsilon}")
                     continue
-                    
-                for metric in performance_metrics.keys():
+
+                for i, trial in enumerate(trials):
+                    if not self._validate_trial_data(trial, epsilon, i):
+                        logger.warning(f"Skipping invalid trial {i} for epsilon {epsilon}")
+                        continue
+
                     try:
-                        avg_diff = np.mean([
-                            trial['privacy_metrics']['performance_differences'][metric]['difference_percent']
-                            for trial in trials
-                            if metric in trial['privacy_metrics']['performance_differences']
-                        ])
-                        performance_metrics[metric].append(avg_diff)
-                    except (KeyError, TypeError):
-                        performance_metrics[metric].append(0.0)
+                        perf_diffs = trial['privacy_metrics']['performance_differences']
+                        for metric in performance_metrics.keys():
+                            if metric not in perf_diffs:
+                                logger.warning(f"Missing performance metric '{metric}' in trial {i} for epsilon {epsilon}")
+                                continue
+                            
+                            diff = perf_diffs[metric]
+                            if not isinstance(diff, dict) or 'difference_percent' not in diff:
+                                logger.warning(f"Invalid performance difference format for '{metric}' in trial {i} for epsilon {epsilon}")
+                                continue
+                            
+                            performance_metrics[metric].append(diff['difference_percent'])
+                    except Exception as e:
+                        logger.error(f"Error processing performance metrics in trial {i} for epsilon {epsilon}: {str(e)}")
+                        continue
             
             for metric, values in performance_metrics.items():
                 if values:  # Only plot if we have data
@@ -316,85 +437,77 @@ class EnhancedVisualization:
             logger.error(f"Error in workload sensitivity plot: {str(e)}")
             raise
     
-    def plot_configuration_differences(self, results: Dict) -> None:
-        """Plot configuration differences with edge case handling."""
+    def plot_configuration_differences(self, results: Dict[float, List]) -> None:
+        """Plot configuration differences with detailed validation."""
         try:
-            # Extract epsilon values and configuration parameters
-            epsilons = sorted(results.keys())
-            if not epsilons:
+            if not results:
                 logger.error("No results to plot")
                 return
-                
-            config_params = set()
-            
-            # Get all unique configuration parameters
-            for epsilon in epsilons:
-                trials = results[epsilon]
-                if not isinstance(trials, list):
-                    logger.error(f"Invalid trials data for epsilon {epsilon}")
-                    continue
-                    
-                for trial in trials:
-                    if not isinstance(trial, dict):
-                        continue
-                    if 'comparison' not in trial or 'parameter_differences' not in trial['comparison']:
-                        continue
-                        
-                    params = trial['comparison']['parameter_differences'].keys()
-                    config_params.update(params)
-            
-            if not config_params:
-                logger.warning("No configuration parameters found to plot")
+
+            if not self._validate_results_structure(results):
+                logger.error("Invalid results structure for configuration differences plot")
                 return
+
+            # Create figure
+            fig, ax = plt.subplots(figsize=self.config.figure_size)
             
-            # Prepare data for each parameter
-            param_data = {param: [] for param in config_params}
-            
-            # Collect data for each epsilon and parameter
+            epsilons = sorted(results.keys())
+            if not epsilons:
+                logger.error("No epsilon values found")
+                return
+
+            # Collect configuration differences
+            config_metrics = {}
             for epsilon in epsilons:
                 trials = results[epsilon]
-                if not isinstance(trials, list):
+                if not trials:
+                    logger.warning(f"No trials found for epsilon {epsilon}")
                     continue
-                    
-                for param in config_params:
-                    differences = []
-                    for trial in trials:
-                        if not isinstance(trial, dict):
+
+                for i, trial in enumerate(trials):
+                    if not self._validate_trial_data(trial, epsilon, i):
+                        logger.warning(f"Skipping invalid trial {i} for epsilon {epsilon}")
+                        continue
+
+                    try:
+                        config_diffs = trial['privacy_metrics']['configuration_differences']
+                        if not isinstance(config_diffs, dict):
+                            logger.warning(f"Invalid configuration differences format in trial {i} for epsilon {epsilon}")
                             continue
-                        if 'comparison' not in trial or 'parameter_differences' not in trial['comparison']:
-                            continue
-                        if param not in trial['comparison']['parameter_differences']:
-                            continue
-                            
-                        diff = trial['comparison']['parameter_differences'][param]
-                        if isinstance(diff, dict) and 'difference_percent' in diff:
-                            differences.append(diff['difference_percent'])
-                    
-                    if differences:
-                        param_data[param].append(np.mean(differences))
-                    else:
-                        param_data[param].append(0.0)
+
+                        for param, diff in config_diffs.items():
+                            if not isinstance(diff, dict) or 'difference_percent' not in diff:
+                                logger.warning(f"Invalid difference format for parameter '{param}' in trial {i} for epsilon {epsilon}")
+                                continue
+
+                            if param not in config_metrics:
+                                config_metrics[param] = []
+                            config_metrics[param].append(diff['difference_percent'])
+                    except Exception as e:
+                        logger.error(f"Error processing configuration differences in trial {i} for epsilon {epsilon}: {str(e)}")
+                        continue
+
+            # Plot configuration differences
+            if config_metrics:
+                for param, values in config_metrics.items():
+                    if values:  # Only plot if we have data
+                        ax.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
             
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 8))
-            
-            # Plot each parameter
-            for param, values in param_data.items():
-                if values:  # Only plot if we have data
-                    ax.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
-            
-            ax.set_title("Configuration Parameter Differences vs Privacy")
-            ax.set_xlabel("Epsilon (ε)")
-            ax.set_ylabel("Average Difference Percentage")
-            ax.grid(True, alpha=0.3)
-            
-            # Only add legend if we have data to show
-            if any(values for values in param_data.values()):
-                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-            
-            plt.tight_layout()
+                ax.set_title("Configuration Changes vs Privacy Level")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Average Configuration Difference (%)")
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            else:
+                ax.text(0.5, 0.5, 'No significant configuration changes',
+                       horizontalalignment='center',
+                       verticalalignment='center',
+                       transform=ax.transAxes)
+                ax.set_title("Configuration Changes")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Average Configuration Difference (%)")
+
             self._save_figure("configuration_differences.png")
-            
         except Exception as e:
             logger.error(f"Error in configuration differences plot: {str(e)}")
             raise
@@ -460,9 +573,17 @@ class EnhancedVisualization:
             logger.error(f"Error in correlation analysis plot: {str(e)}")
             raise
     
-    def plot_tuning_stability(self, results: Dict) -> None:
+    def plot_tuning_stability(self, results: Dict[float, List]) -> None:
         """Plot tuning stability analysis with confidence intervals."""
         try:
+            if not results:
+                logger.error("No results to plot")
+                return
+
+            if not self._validate_results_structure(results):
+                logger.error("Invalid results structure for tuning stability plot")
+                return
+
             # Create analysis instance
             analysis = PrivacyAnalysis()
             stability_metrics = analysis._analyze_tuning_stability(results)
@@ -470,7 +591,16 @@ class EnhancedVisualization:
             if not stability_metrics:
                 logger.warning("No stability metrics to plot")
                 return
-            
+
+            # Validate stability metrics structure
+            for epsilon, metrics in stability_metrics.items():
+                if not isinstance(metrics, dict):
+                    logger.error(f"Invalid stability metrics format for epsilon {epsilon}")
+                    continue
+                if 'configuration_stability' not in metrics or 'performance_stability' not in metrics:
+                    logger.error(f"Missing required stability metrics for epsilon {epsilon}")
+                    continue
+
             # Create figure
             fig, axes = plt.subplots(2, 2, figsize=(15, 12))
             
@@ -575,4 +705,78 @@ class EnhancedVisualization:
             
         except Exception as e:
             logger.error(f"Error in tuning stability plot: {str(e)}")
+            raise
+    
+    def plot_workload_characteristics(self, results: Dict[float, List]) -> None:
+        """Plot workload characteristics with detailed validation."""
+        try:
+            if not results:
+                logger.error("No results to plot")
+                return
+
+            if not self._validate_results_structure(results):
+                logger.error("Invalid results structure for workload characteristics plot")
+                return
+
+            # Create figure
+            fig, ax = plt.subplots(figsize=self.config.figure_size)
+            
+            epsilons = sorted(results.keys())
+            if not epsilons:
+                logger.error("No epsilon values found")
+                return
+
+            # Collect workload characteristics
+            workload_metrics = {}
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
+                    logger.warning(f"No trials found for epsilon {epsilon}")
+                    continue
+
+                for i, trial in enumerate(trials):
+                    if not self._validate_trial_data(trial, epsilon, i):
+                        logger.warning(f"Skipping invalid trial {i} for epsilon {epsilon}")
+                        continue
+
+                    try:
+                        characteristics = trial['workload_characteristics']
+                        if not isinstance(characteristics, dict):
+                            logger.warning(f"Invalid workload characteristics format in trial {i} for epsilon {epsilon}")
+                            continue
+
+                        for char, value in characteristics.items():
+                            if char not in workload_metrics:
+                                workload_metrics[char] = []
+                            if isinstance(value, (int, float)):
+                                workload_metrics[char].append(value)
+                            else:
+                                logger.warning(f"Invalid value format for characteristic '{char}' in trial {i} for epsilon {epsilon}: {type(value)}")
+                    except Exception as e:
+                        logger.error(f"Error processing workload characteristics in trial {i} for epsilon {epsilon}: {str(e)}")
+                        continue
+
+            # Plot workload characteristics
+            if workload_metrics:
+                for char, values in workload_metrics.items():
+                    if values:  # Only plot if we have data
+                        ax.plot(epsilons, values, 'o-', label=char.replace('_', ' ').title())
+            
+                ax.set_title("Workload Characteristics vs Privacy Level")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Characteristic Value")
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            else:
+                ax.text(0.5, 0.5, 'No workload characteristics data available',
+                       horizontalalignment='center',
+                       verticalalignment='center',
+                       transform=ax.transAxes)
+                ax.set_title("Workload Characteristics")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Characteristic Value")
+
+            self._save_figure("workload_characteristics.png")
+        except Exception as e:
+            logger.error(f"Error in workload characteristics plot: {str(e)}")
             raise 
