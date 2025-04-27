@@ -245,6 +245,10 @@ class EnhancedVisualization:
                     logger.warning(f"No trials found for epsilon {epsilon}")
                     continue
 
+                # Initialize lists for this epsilon
+                for metric in performance_metrics.keys():
+                    performance_metrics[metric].append([])
+
                 for i, trial in enumerate(trials):
                     if not self._validate_trial_data(trial, epsilon, i):
                         logger.warning(f"Skipping invalid trial {i} for epsilon {epsilon}")
@@ -253,19 +257,18 @@ class EnhancedVisualization:
                     try:
                         perf_diffs = trial['privacy_metrics']['performance_differences']
                         for metric in performance_metrics.keys():
-                            if metric not in perf_diffs:
-                                logger.warning(f"Missing performance metric '{metric}' in trial {i} for epsilon {epsilon}")
-                                continue
-                            
-                            diff = perf_diffs[metric]
-                            if not isinstance(diff, dict) or 'difference_percent' not in diff:
-                                logger.warning(f"Invalid performance difference format for '{metric}' in trial {i} for epsilon {epsilon}")
-                                continue
-                            
-                            performance_metrics[metric].append(diff['difference_percent'])
+                            if metric in perf_diffs and 'difference_percent' in perf_diffs[metric]:
+                                performance_metrics[metric][-1].append(perf_diffs[metric]['difference_percent'])
                     except Exception as e:
                         logger.error(f"Error processing performance metrics in trial {i} for epsilon {epsilon}: {str(e)}")
                         continue
+
+                # Calculate averages for this epsilon
+                for metric in performance_metrics.keys():
+                    if performance_metrics[metric][-1]:
+                        performance_metrics[metric][-1] = np.mean(performance_metrics[metric][-1])
+                    else:
+                        performance_metrics[metric][-1] = 0.0
             
             for metric, values in performance_metrics.items():
                 if values:  # Only plot if we have data
@@ -291,7 +294,8 @@ class EnhancedVisualization:
                         for param, diff in trial['privacy_metrics']['configuration_differences'].items():
                             if param not in config_metrics:
                                 config_metrics[param] = []
-                            config_metrics[param].append(diff['difference_percent'])
+                            if 'difference_percent' in diff:
+                                config_metrics[param].append(diff['difference_percent'])
                     except (KeyError, TypeError):
                         continue
             
@@ -314,32 +318,28 @@ class EnhancedVisualization:
             
             # Plot 3: Privacy-Utility Tradeoff Score
             ax3 = fig.add_subplot(gs[1, :])
-            scores = {
-                'Performance': [],
-                'Configuration': [],
-                'Overall': []
-            }
+            scores = []
             
             for epsilon in epsilons:
                 trials = results[epsilon]
                 if not trials:
                     continue
                     
-                for score_type in scores.keys():
-                    try:
-                        avg_score = np.mean([
-                            trial['privacy_metrics']['privacy_utility_score'][f"{score_type.lower()}_score"]
-                            for trial in trials
-                        ])
-                        scores[score_type].append(avg_score)
-                    except (KeyError, TypeError):
-                        scores[score_type].append(0.0)
+                try:
+                    avg_score = np.mean([
+                        trial['privacy_metrics']['privacy_utility_score']['score']
+                        for trial in trials
+                        if 'privacy_utility_score' in trial['privacy_metrics']
+                        and 'score' in trial['privacy_metrics']['privacy_utility_score']
+                    ])
+                    scores.append(avg_score)
+                except (KeyError, TypeError):
+                    scores.append(0.0)
             
-            for score_type, values in scores.items():
-                if values:  # Only plot if we have data
-                    ax3.plot(epsilons, values, 'o-', label=score_type)
+            if scores:  # Only plot if we have data
+                ax3.plot(epsilons, scores, 'o-', label='Privacy-Utility Score')
             
-            ax3.set_title("Privacy-Utility Tradeoff Scores")
+            ax3.set_title("Privacy-Utility Tradeoff Score")
             ax3.set_xlabel("Epsilon (ε)")
             ax3.set_ylabel("Score (0-100)")
             ax3.grid(True, alpha=0.3)
@@ -359,16 +359,32 @@ class EnhancedVisualization:
                 if not trials:
                     continue
                     
+                # Initialize counts for this epsilon
                 for impact in impact_levels.keys():
+                    impact_levels[impact].append(0)
+                
+                for trial in trials:
                     try:
-                        count = sum(
-                            1 for trial in trials
-                            for metric in trial['privacy_metrics']['performance_differences'].values()
-                            if metric['impact'] == impact
-                        )
-                        impact_levels[impact].append(count / len(trials) * 100)
+                        perf_diffs = trial['privacy_metrics']['performance_differences']
+                        for diff in perf_diffs.values():
+                            if 'difference_percent' in diff:
+                                percent_diff = diff['difference_percent']
+                                if percent_diff < 5:
+                                    impact_levels['Negligible'][-1] += 1
+                                elif percent_diff < 15:
+                                    impact_levels['Minor'][-1] += 1
+                                elif percent_diff < 30:
+                                    impact_levels['Moderate'][-1] += 1
+                                else:
+                                    impact_levels['Significant'][-1] += 1
                     except (KeyError, TypeError):
-                        impact_levels[impact].append(0.0)
+                        continue
+                
+                # Convert counts to percentages
+                total = sum(impact_levels[impact][-1] for impact in impact_levels.keys())
+                if total > 0:
+                    for impact in impact_levels.keys():
+                        impact_levels[impact][-1] = (impact_levels[impact][-1] / total) * 100
             
             x = np.arange(len(epsilons))
             width = 0.2
@@ -456,40 +472,48 @@ class EnhancedVisualization:
                 logger.error("No epsilon values found")
                 return
 
-            # Collect configuration differences
+            # Initialize configuration metrics
             config_metrics = {}
+            
+            # First pass: collect all differences for each parameter
             for epsilon in epsilons:
                 trials = results[epsilon]
                 if not trials:
                     logger.warning(f"No trials found for epsilon {epsilon}")
                     continue
 
-                for i, trial in enumerate(trials):
-                    if not self._validate_trial_data(trial, epsilon, i):
-                        logger.warning(f"Skipping invalid trial {i} for epsilon {epsilon}")
-                        continue
-
+                for trial in trials:
                     try:
                         config_diffs = trial['privacy_metrics']['configuration_differences']
                         if not isinstance(config_diffs, dict):
-                            logger.warning(f"Invalid configuration differences format in trial {i} for epsilon {epsilon}")
+                            logger.warning(f"Invalid configuration differences format in trial for epsilon {epsilon}")
                             continue
 
                         for param, diff in config_diffs.items():
                             if not isinstance(diff, dict) or 'difference_percent' not in diff:
-                                logger.warning(f"Invalid difference format for parameter '{param}' in trial {i} for epsilon {epsilon}")
+                                logger.warning(f"Invalid difference format for parameter '{param}' in trial for epsilon {epsilon}")
                                 continue
 
                             if param not in config_metrics:
-                                config_metrics[param] = []
-                            config_metrics[param].append(diff['difference_percent'])
+                                config_metrics[param] = {eps: [] for eps in epsilons}
+                            config_metrics[param][epsilon].append(diff['difference_percent'])
                     except Exception as e:
-                        logger.error(f"Error processing configuration differences in trial {i} for epsilon {epsilon}: {str(e)}")
+                        logger.error(f"Error processing configuration differences in trial for epsilon {epsilon}: {str(e)}")
                         continue
 
+            # Second pass: calculate averages and prepare for plotting
+            plot_data = {}
+            for param, epsilon_data in config_metrics.items():
+                plot_data[param] = []
+                for epsilon in epsilons:
+                    if epsilon_data[epsilon]:
+                        plot_data[param].append(np.mean(epsilon_data[epsilon]))
+                    else:
+                        plot_data[param].append(0.0)
+
             # Plot configuration differences
-            if config_metrics:
-                for param, values in config_metrics.items():
+            if plot_data:
+                for param, values in plot_data.items():
                     if values:  # Only plot if we have data
                         ax.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
             
