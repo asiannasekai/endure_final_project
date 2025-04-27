@@ -74,6 +74,9 @@ class EnhancedVisualization:
     def _handle_numeric_data(self, data: Dict) -> Dict:
         """Handle numeric data with edge cases."""
         try:
+            if not isinstance(data, dict):
+                raise ValueError("Input data must be a dictionary")
+                
             processed_data = {}
             for key, value in data.items():
                 if isinstance(value, (int, float)):
@@ -84,6 +87,11 @@ class EnhancedVisualization:
                         processed_data[key] = float(value)
                 elif isinstance(value, dict):
                     processed_data[key] = self._handle_numeric_data(value)
+                elif isinstance(value, list):
+                    processed_data[key] = [
+                        float(v) if isinstance(v, (int, float)) and not (np.isnan(v) or np.isinf(v)) else 0.0
+                        for v in value
+                    ]
                 else:
                     processed_data[key] = value
             return processed_data
@@ -266,6 +274,9 @@ class EnhancedVisualization:
         """Plot workload sensitivity with edge case handling."""
         try:
             # Validate required data
+            if not isinstance(results, dict):
+                raise ValueError("Results must be a dictionary")
+                
             if 'workload_characteristics' not in results:
                 logger.error("Missing workload characteristics data")
                 return
@@ -277,7 +288,7 @@ class EnhancedVisualization:
             fig, axes = plt.subplots(2, 2, figsize=(15, 12))
             
             # Plot characteristics
-            characteristics = ['read_ratio', 'write_ratio']
+            characteristics = ['read_ratio', 'write_ratio', 'key_size', 'value_size']
             for i, char in enumerate(characteristics):
                 ax = axes[i//2, i%2]
                 try:
@@ -293,7 +304,7 @@ class EnhancedVisualization:
                     # Simple bar plot for now
                     ax.bar([char], [value])
                     ax.set_title(f"{char.replace('_', ' ').title()}")
-                    ax.set_ylim(0, 1)
+                    ax.set_ylim(0, max(1, value * 1.1))  # Add 10% padding
                 except Exception as e:
                     logger.error(f"Error plotting {char}: {str(e)}")
                     continue
@@ -310,13 +321,31 @@ class EnhancedVisualization:
         try:
             # Extract epsilon values and configuration parameters
             epsilons = sorted(results.keys())
+            if not epsilons:
+                logger.error("No results to plot")
+                return
+                
             config_params = set()
             
             # Get all unique configuration parameters
             for epsilon in epsilons:
-                for trial in results[epsilon]:
+                trials = results[epsilon]
+                if not isinstance(trials, list):
+                    logger.error(f"Invalid trials data for epsilon {epsilon}")
+                    continue
+                    
+                for trial in trials:
+                    if not isinstance(trial, dict):
+                        continue
+                    if 'comparison' not in trial or 'parameter_differences' not in trial['comparison']:
+                        continue
+                        
                     params = trial['comparison']['parameter_differences'].keys()
                     config_params.update(params)
+            
+            if not config_params:
+                logger.warning("No configuration parameters found to plot")
+                return
             
             # Prepare data for each parameter
             param_data = {param: [] for param in config_params}
@@ -324,27 +353,44 @@ class EnhancedVisualization:
             # Collect data for each epsilon and parameter
             for epsilon in epsilons:
                 trials = results[epsilon]
+                if not isinstance(trials, list):
+                    continue
+                    
                 for param in config_params:
-                    # Calculate average difference percentage across trials
-                    avg_diff = np.mean([
-                        trial['comparison']['parameter_differences'][param]['difference_percent']
-                        for trial in trials
-                        if param in trial['comparison']['parameter_differences']
-                    ])
-                    param_data[param].append(avg_diff)
+                    differences = []
+                    for trial in trials:
+                        if not isinstance(trial, dict):
+                            continue
+                        if 'comparison' not in trial or 'parameter_differences' not in trial['comparison']:
+                            continue
+                        if param not in trial['comparison']['parameter_differences']:
+                            continue
+                            
+                        diff = trial['comparison']['parameter_differences'][param]
+                        if isinstance(diff, dict) and 'difference_percent' in diff:
+                            differences.append(diff['difference_percent'])
+                    
+                    if differences:
+                        param_data[param].append(np.mean(differences))
+                    else:
+                        param_data[param].append(0.0)
             
             # Create figure
             fig, ax = plt.subplots(figsize=(12, 8))
             
             # Plot each parameter
             for param, values in param_data.items():
-                ax.plot(epsilons, values, 'o-', label=param)
+                if values:  # Only plot if we have data
+                    ax.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
             
             ax.set_title("Configuration Parameter Differences vs Privacy")
             ax.set_xlabel("Epsilon (ε)")
             ax.set_ylabel("Average Difference Percentage")
             ax.grid(True, alpha=0.3)
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            
+            # Only add legend if we have data to show
+            if any(values for values in param_data.values()):
+                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
             
             plt.tight_layout()
             self._save_figure("configuration_differences.png")
@@ -357,6 +403,9 @@ class EnhancedVisualization:
         """Plot correlation analysis with edge case handling."""
         try:
             # Validate required data
+            if not isinstance(results, dict):
+                raise ValueError("Results must be a dictionary")
+                
             required_fields = ['metrics', 'workload_characteristics']
             if not all(field in results for field in required_fields):
                 logger.error(f"Missing required fields for correlation analysis: {required_fields}")
@@ -369,19 +418,23 @@ class EnhancedVisualization:
             metrics = list(processed_data['metrics'].keys())
             characteristics = list(processed_data['workload_characteristics'].keys())
             
+            if not metrics or not characteristics:
+                logger.error("No metrics or characteristics data available")
+                return
+            
             all_data = {**processed_data['metrics'], **processed_data['workload_characteristics']}
             correlation_matrix = np.zeros((len(all_data), len(all_data)))
             
-            # Simple correlation calculation (can be improved)
+            # Calculate correlations
             for i, (k1, v1) in enumerate(all_data.items()):
                 for j, (k2, v2) in enumerate(all_data.items()):
                     if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
-                        correlation_matrix[i, j] = 1.0 if k1 == k2 else 0.5
+                        correlation_matrix[i, j] = 1.0 if k1 == k2 else 0.5  # Placeholder correlation
             
             # Create figure
             fig, ax = plt.subplots(figsize=self.config.figure_size)
             
-            # Plot correlation matrix using matplotlib
+            # Plot correlation matrix
             im = ax.imshow(correlation_matrix, cmap='coolwarm', vmin=-1, vmax=1)
             
             # Add colorbar
@@ -405,4 +458,121 @@ class EnhancedVisualization:
             
         except Exception as e:
             logger.error(f"Error in correlation analysis plot: {str(e)}")
+            raise
+    
+    def plot_tuning_stability(self, results: Dict) -> None:
+        """Plot tuning stability analysis with confidence intervals."""
+        try:
+            # Create analysis instance
+            analysis = PrivacyAnalysis()
+            stability_metrics = analysis._analyze_tuning_stability(results)
+            
+            if not stability_metrics:
+                logger.warning("No stability metrics to plot")
+                return
+            
+            # Create figure
+            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            
+            # Plot 1: Configuration Stability
+            ax1 = axes[0, 0]
+            epsilons = sorted(stability_metrics.keys())
+            config_stability = [
+                stability_metrics[eps]['configuration_stability']
+                for eps in epsilons
+            ]
+            
+            means = [m['mean'] for m in config_stability]
+            ci_lower = [m['ci_lower'] for m in config_stability]
+            ci_upper = [m['ci_upper'] for m in config_stability]
+            
+            ax1.errorbar(epsilons, means, yerr=[means[i] - ci_lower[i] for i in range(len(means))],
+                        fmt='o-', capsize=5, label='Mean with 95% CI')
+            ax1.set_title("Configuration Stability vs Privacy Level")
+            ax1.set_xlabel("Epsilon (ε)")
+            ax1.set_ylabel("Average Configuration Difference (%)")
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+            
+            # Plot 2: Performance Stability
+            ax2 = axes[0, 1]
+            performance_metrics = ['throughput', 'latency', 'space_amplification']
+            for metric in performance_metrics:
+                means = []
+                ci_lower = []
+                ci_upper = []
+                for eps in epsilons:
+                    if metric in stability_metrics[eps]['performance_stability']:
+                        stats = stability_metrics[eps]['performance_stability'][metric]
+                        means.append(stats['mean'])
+                        ci_lower.append(stats['ci_lower'])
+                        ci_upper.append(stats['ci_upper'])
+                    else:
+                        means.append(0)
+                        ci_lower.append(0)
+                        ci_upper.append(0)
+                
+                ax2.errorbar(epsilons, means, yerr=[means[i] - ci_lower[i] for i in range(len(means))],
+                            fmt='o-', capsize=5, label=metric.replace('_', ' ').title())
+            
+            ax2.set_title("Performance Stability vs Privacy Level")
+            ax2.set_xlabel("Epsilon (ε)")
+            ax2.set_ylabel("Average Performance Difference (%)")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            
+            # Plot 3: Workload Pattern Analysis
+            ax3 = axes[1, 0]
+            pattern_metrics = analysis._analyze_workload_patterns(results)
+            
+            if pattern_metrics:
+                patterns = ['read_write_ratio', 'hot_key_access']
+                for pattern in patterns:
+                    means = []
+                    ci_lower = []
+                    ci_upper = []
+                    for eps in epsilons:
+                        if pattern in pattern_metrics[eps]:
+                            stats = pattern_metrics[eps][pattern]
+                            means.append(stats['mean'])
+                            ci_lower.append(stats['ci_lower'])
+                            ci_upper.append(stats['ci_upper'])
+                        else:
+                            means.append(0)
+                            ci_lower.append(0)
+                            ci_upper.append(0)
+                    
+                    ax3.errorbar(epsilons, means, yerr=[means[i] - ci_lower[i] for i in range(len(means))],
+                                fmt='o-', capsize=5, label=pattern.replace('_', ' ').title())
+            
+            ax3.set_title("Workload Pattern Stability vs Privacy Level")
+            ax3.set_xlabel("Epsilon (ε)")
+            ax3.set_ylabel("Pattern Metric Value")
+            ax3.grid(True, alpha=0.3)
+            ax3.legend()
+            
+            # Plot 4: Stability Summary
+            ax4 = axes[1, 1]
+            stability_scores = []
+            for eps in epsilons:
+                config_stab = stability_metrics[eps]['configuration_stability']['mean']
+                perf_stab = np.mean([
+                    stability_metrics[eps]['performance_stability'][metric]['mean']
+                    for metric in performance_metrics
+                    if metric in stability_metrics[eps]['performance_stability']
+                ])
+                stability_scores.append(100 - (config_stab + perf_stab) / 2)
+            
+            ax4.plot(epsilons, stability_scores, 'o-', label='Overall Stability Score')
+            ax4.set_title("Overall Tuning Stability vs Privacy Level")
+            ax4.set_xlabel("Epsilon (ε)")
+            ax4.set_ylabel("Stability Score (0-100)")
+            ax4.grid(True, alpha=0.3)
+            ax4.legend()
+            
+            plt.tight_layout()
+            self._save_figure("tuning_stability_analysis.png")
+            
+        except Exception as e:
+            logger.error(f"Error in tuning stability plot: {str(e)}")
             raise 

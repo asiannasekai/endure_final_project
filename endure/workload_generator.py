@@ -223,27 +223,75 @@ class WorkloadGenerator:
         return self._generate_workload_internal(noisy_characteristics)
 
     def calculate_workload_metrics(self, workload: List[Dict]) -> Dict:
-        """Calculate metrics from a workload."""
-        if not workload:
-            raise ValueError("Cannot calculate metrics for empty workload")
-
-        total_ops = len(workload)
-        read_count = len([op for op in workload if op["type"] == "read"])
-        write_count = total_ops - read_count
-        hot_op_count = len([op for op in workload if op.get("is_hot", False)])
-
-        # Add safeguards against division by zero
-        if total_ops == 0:
+        """Calculate detailed workload metrics."""
+        try:
+            if not workload:
+                return {
+                    'read_ratio': 0.0,
+                    'write_ratio': 0.0,
+                    'hot_key_ratio': 0.0,
+                    'operation_distribution': {},
+                    'key_distribution': {},
+                    'value_size_distribution': {},
+                    'temporal_patterns': {}
+                }
+            
+            # Basic metrics
+            total_ops = len(workload)
+            read_count = sum(1 for op in workload if op['type'] == 'read')
+            write_count = total_ops - read_count
+            
+            # Key access patterns
+            key_access_counts = {}
+            for op in workload:
+                key = op['key']
+                key_access_counts[key] = key_access_counts.get(key, 0) + 1
+            
+            # Sort keys by access frequency
+            sorted_keys = sorted(key_access_counts.items(), key=lambda x: x[1], reverse=True)
+            hot_keys = sorted_keys[:10]  # Top 10 most accessed keys
+            
+            # Value size distribution
+            value_sizes = {}
+            for op in workload:
+                if op['type'] == 'write':
+                    size = len(op['value'])
+                    value_sizes[size] = value_sizes.get(size, 0) + 1
+            
+            # Temporal patterns (operations per time window)
+            time_windows = {}
+            window_size = 1000  # operations per window
+            for i, op in enumerate(workload):
+                window = i // window_size
+                time_windows[window] = time_windows.get(window, 0) + 1
+            
             return {
-                "read_ratio": 0.0,
-                "write_ratio": 0.0,
-                "hot_key_ratio": 0.0,
-                "total_operations": 0
+                'read_ratio': read_count / total_ops if total_ops > 0 else 0.0,
+                'write_ratio': write_count / total_ops if total_ops > 0 else 0.0,
+                'hot_key_ratio': sum(count for _, count in hot_keys) / total_ops if total_ops > 0 else 0.0,
+                'operation_distribution': {
+                    'read': read_count,
+                    'write': write_count
+                },
+                'key_distribution': {
+                    'total_unique_keys': len(key_access_counts),
+                    'hot_keys': dict(hot_keys),
+                    'key_access_counts': key_access_counts
+                },
+                'value_size_distribution': value_sizes,
+                'temporal_patterns': {
+                    'window_size': window_size,
+                    'operations_per_window': time_windows
+                }
             }
-
-        return {
-            "read_ratio": read_count / total_ops,
-            "write_ratio": write_count / total_ops,
-            "hot_key_ratio": hot_op_count / total_ops,
-            "total_operations": total_ops
-        } 
+        except Exception as e:
+            logger.error(f"Error calculating workload metrics: {str(e)}")
+            return {
+                'read_ratio': 0.0,
+                'write_ratio': 0.0,
+                'hot_key_ratio': 0.0,
+                'operation_distribution': {},
+                'key_distribution': {},
+                'value_size_distribution': {},
+                'temporal_patterns': {}
+            } 
