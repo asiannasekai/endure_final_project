@@ -1,0 +1,28 @@
+{
+    "analysis": {
+        "results_dir": "results",
+        "log_level": "INFO",
+        "save_raw_data": true,
+        "validate_results": true,
+        "max_workers": 4
+    },
+    "visualization": {
+        "style": "whitegrid",
+        "figure_size": [12, 8],
+        "font_size": 12,
+        "color_palette": "husl",
+        "dpi": 300,
+        "save_format": "png"
+    },
+    "privacy": {
+        "epsilon_range": [0.1, 10.0],
+        "epsilon_steps": 10,
+        "delta": 1e-5,
+        "noise_scale": 1.0
+    },
+    "performance": {
+        "metrics": ["throughput", "latency", "space_amplification"],
+        "workload_types": ["read_heavy", "write_heavy", "balanced"],
+        "sample_size": 1000
+    }
+} 
