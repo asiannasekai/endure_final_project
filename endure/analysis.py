@@ -88,6 +88,31 @@ class BaseAnalysis:
             logger.error(f"Error creating directory {self.results_dir}: {str(e)}")
             raise
     
+    def _validate_results(self, results: Dict) -> AnalysisResult:
+        """Validate analysis results and return AnalysisResult object."""
+        try:
+            # Check required fields
+            required_fields = ['metrics', 'configurations', 'workload_characteristics']
+            if not all(field in results for field in required_fields):
+                logger.error(f"Missing required fields: {required_fields}")
+                return None
+            
+            # Create AnalysisResult object
+            analysis_result = AnalysisResult(
+                metrics=results['metrics'],
+                configurations=results['configurations'],
+                workload_characteristics=results['workload_characteristics']
+            )
+            
+            # Validate the result
+            if not analysis_result.validate():
+                return None
+            
+            return analysis_result
+        except Exception as e:
+            logger.error(f"Error validating results: {str(e)}")
+            return None
+    
     def _save_results(self, results: Dict, filename: str) -> None:
         """Save analysis results with error handling."""
         try:
