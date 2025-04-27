@@ -121,6 +121,10 @@ def run_analysis(
                 sys.exit(1)
             config.analysis.results_dir = output_dir
         
+        # Convert epsilon values to floats if they exist in the config
+        if hasattr(config, 'privacy') and hasattr(config.privacy, 'epsilon_range'):
+            config.privacy.epsilon_range = [float(e) for e in config.privacy.epsilon_range]
+        
         if analysis_type in ['privacy', 'all']:
             logging.info("Running privacy analysis...")
             analysis = PrivacyAnalysis(results_dir=config.analysis.results_dir)
