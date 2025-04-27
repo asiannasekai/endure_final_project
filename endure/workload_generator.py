@@ -143,8 +143,14 @@ class WorkloadGenerator:
         workload = []
         total_ops = characteristics.operation_count
         
-        # Generate hot keys
-        hot_keys = [f"hot_key_{i}" for i in range(characteristics.hot_key_count)]
+        # Generate hot keys with size limit
+        hot_keys = []
+        for i in range(characteristics.hot_key_count):
+            # Generate key that fits within size limit
+            key = f"hk{i}"
+            while len(key.encode()) > characteristics.key_size:
+                key = key[:-1]  # Remove last character if too large
+            hot_keys.append(key)
         
         # Generate operations in batches
         for batch_start in range(0, total_ops, self.batch_size):
@@ -161,7 +167,10 @@ class WorkloadGenerator:
                 if is_hot:
                     key = np.random.choice(hot_keys)
                 else:
-                    key = f"key_{i}"
+                    # Generate key that fits within size limit
+                    key = f"k{i}"
+                    while len(key.encode()) > characteristics.key_size:
+                        key = key[:-1]  # Remove last character if too large
                 
                 operation = {
                     "type": "read" if is_read else "write",
