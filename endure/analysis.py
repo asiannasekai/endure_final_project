@@ -72,6 +72,7 @@ class BaseAnalysis:
         self.results_dir = results_dir
         self._setup_logging()
         self._setup_directories()
+        self.visualizer = EnhancedVisualization(results_dir)
     
     def _setup_logging(self) -> None:
         """Setup file logging for the analysis."""
@@ -113,6 +114,22 @@ class BaseAnalysis:
             logger.error(f"Error validating results: {str(e)}")
             return None
     
+    def _process_data(self, data: Dict) -> Dict:
+        """Process data with standardized handling."""
+        try:
+            processed = {}
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    processed[key] = self._process_data(value)
+                elif isinstance(value, (int, float)):
+                    processed[key] = self._handle_numeric_values(value)
+                else:
+                    processed[key] = value
+            return processed
+        except Exception as e:
+            logger.error(f"Error processing data: {str(e)}")
+            raise
+    
     def _save_results(self, results: Dict, filename: str) -> None:
         """Save analysis results with error handling."""
         try:
@@ -147,14 +164,19 @@ class PrivacyAnalysis(BaseAnalysis):
             if not analysis_result:
                 raise ValueError("Invalid analysis results")
             
-            # Handle edge cases in metrics
-            processed_metrics = {
-                k: self._handle_numeric_values(v)
-                for k, v in analysis_result.metrics.items()
-            }
+            # Process all data
+            processed_data = self._process_data({
+                'metrics': analysis_result.metrics,
+                'configurations': analysis_result.configurations,
+                'workload_characteristics': analysis_result.workload_characteristics
+            })
             
             # Save results
-            self._save_results(processed_metrics, "privacy_analysis.json")
+            self._save_results(processed_data, "privacy_analysis.json")
+            
+            # Generate visualizations
+            self.visualizer.plot_privacy_performance_tradeoff(processed_data)
+            self.visualizer.plot_configuration_differences(processed_data)
             
             logger.info("Privacy analysis completed successfully")
             
@@ -173,14 +195,19 @@ class SensitivityAnalysis(BaseAnalysis):
             if not analysis_result:
                 raise ValueError("Invalid analysis results")
             
-            # Handle edge cases in workload characteristics
-            processed_characteristics = {
-                k: self._handle_numeric_values(v)
-                for k, v in analysis_result.workload_characteristics.items()
-            }
+            # Process all data
+            processed_data = self._process_data({
+                'metrics': analysis_result.metrics,
+                'configurations': analysis_result.configurations,
+                'workload_characteristics': analysis_result.workload_characteristics
+            })
             
             # Save results
-            self._save_results(processed_characteristics, "sensitivity_analysis.json")
+            self._save_results(processed_data, "sensitivity_analysis.json")
+            
+            # Generate visualizations
+            self.visualizer.plot_workload_sensitivity(processed_data)
+            self.visualizer.plot_correlation_analysis(processed_data)
             
             logger.info("Sensitivity analysis completed successfully")
             
@@ -199,14 +226,19 @@ class PerformanceAnalysis(BaseAnalysis):
             if not analysis_result:
                 raise ValueError("Invalid analysis results")
             
-            # Handle edge cases in metrics
-            processed_metrics = {
-                k: self._handle_numeric_values(v)
-                for k, v in analysis_result.metrics.items()
-            }
+            # Process all data
+            processed_data = self._process_data({
+                'metrics': analysis_result.metrics,
+                'configurations': analysis_result.configurations,
+                'workload_characteristics': analysis_result.workload_characteristics
+            })
             
             # Save results
-            self._save_results(processed_metrics, "performance_analysis.json")
+            self._save_results(processed_data, "performance_analysis.json")
+            
+            # Generate visualizations
+            self.visualizer.plot_privacy_performance_tradeoff(processed_data)
+            self.visualizer.plot_configuration_differences(processed_data)
             
             logger.info("Performance analysis completed successfully")
             
