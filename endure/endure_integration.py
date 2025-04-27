@@ -4,6 +4,8 @@ from .rocksdb_config import RocksDBConfig
 import numpy as np
 import json
 import os
+import rocksdb
+import time
 
 class EndureIntegration:
     def __init__(self, epsilon: float = 1.0):
@@ -53,28 +55,81 @@ class EndureIntegration:
 
     def run_endure_tuning(self, trace_path: str) -> Dict:
         """Run Endure tuning on a workload trace."""
-        # This is a placeholder for actual Endure integration
-        # In practice, this would call Endure's tuning API
+        # Load workload trace
+        with open(trace_path, 'r') as f:
+            workload = json.load(f)
+        
+        # Create RocksDB configuration
+        config = RocksDBConfig(
+            db_path=f"rocksdb_data_{os.path.basename(trace_path)}",
+            max_background_jobs=16,  # Increased for better parallelism
+            max_subcompactions=8,    # Increased for better parallelism
+            write_buffer_size=256 * 1024 * 1024,  # Increased buffer size
+            max_write_buffer_number=8,  # Increased for better write performance
+            level0_file_num_compaction_trigger=8,
+            level0_slowdown_writes_trigger=32,
+            compression_type="lz4",
+            block_cache_size=16 * 1024 * 1024 * 1024,  # Increased cache size
+            optimize_filters_for_hits=True,
+            bloom_locality=1,
+            batch_size=10000  # Increased batch size
+        )
+        
+        # Set up database
+        os.makedirs(config.db_path, exist_ok=True)
+        opts = rocksdb.Options(**config.to_dict())
+        db = rocksdb.DB(config.db_path, opts)
+        
+        # Run workload
+        start_time = time.time()
+        total_operations = len(workload)
+        batch_size = 10000  # Process in larger batches
+        
+        # Pre-allocate write batches
+        write_batches = []
+        current_batch = rocksdb.WriteBatch()
+        current_batch_size = 0
+        
+        for op in workload:
+            if op["operation"] == "PUT":
+                current_batch.put(op["key"].encode(), op["value"].encode())
+                current_batch_size += 1
+            else:  # GET
+                db.get(op["key"].encode())
+            
+            if current_batch_size >= batch_size:
+                write_batches.append(current_batch)
+                current_batch = rocksdb.WriteBatch()
+                current_batch_size = 0
+        
+        if current_batch_size > 0:
+            write_batches.append(current_batch)
+        
+        # Write all batches
+        for batch in write_batches:
+            db.write(batch)
+        
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        # Calculate performance metrics
+        throughput = total_operations / duration
+        latency = duration / total_operations * 1000  # Convert to milliseconds
+        
+        # Get space amplification
+        stats = db.get_property(b"rocksdb.stats")
+        space_amplification = float(stats.split(b"Space amplification: ")[1].split(b"\n")[0])
+        
+        # Clean up
+        db.close()
+        
         return {
-            "config": self._mock_endure_tuning(trace_path),
-            "performance_metrics": self._mock_performance_metrics()
-        }
-
-    def _mock_endure_tuning(self, trace_path: str) -> Dict:
-        """Mock Endure tuning process."""
-        # In practice, this would return actual Endure configuration
-        return {
-            "write_buffer_size": 64 * 1024 * 1024,
-            "max_write_buffer_number": 3,
-            "level0_file_num_compaction_trigger": 4
-        }
-
-    def _mock_performance_metrics(self) -> Dict:
-        """Mock performance metrics."""
-        return {
-            "throughput": np.random.normal(1000, 100),
-            "latency": np.random.normal(10, 1),
-            "space_amplification": np.random.normal(1.5, 0.1)
+            "config": config.to_dict(),
+            "performance_metrics": {
+                "throughput": throughput,
+                "latency": latency,
+                "space_amplification": space_amplification
+            }
         }
 
     def compare_configurations(self, original_config: Dict, private_config: Dict) -> Dict:

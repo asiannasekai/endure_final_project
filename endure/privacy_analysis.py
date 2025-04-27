@@ -44,9 +44,20 @@ class PrivacyAnalysis:
             return False
 
     def run_privacy_sweep(self, characteristics: WorkloadCharacteristics,
-                         epsilons: List[float] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
-                         num_trials: int = 10) -> Dict:
+                         epsilons: List[float] = [0.1, 0.5, 1.0, 2.0, 5.0],
+                         num_trials: int = 5) -> Dict:
         """Run multiple trials with different epsilon values."""
+        # Use optimized workload size
+        characteristics = WorkloadCharacteristics(
+            read_ratio=0.7,
+            write_ratio=0.3,
+            key_size=16,
+            value_size=100,
+            operation_count=500000,  # Reduced to 500k operations
+            hot_key_ratio=0.2,
+            hot_key_count=100
+        )
+        
         results = {}
         
         for epsilon in epsilons:

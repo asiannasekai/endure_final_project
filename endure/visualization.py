@@ -247,6 +247,7 @@ class EnhancedVisualization:
                     
                     ax.bar(metrics, values)
                     ax.set_title(f"{config.title()} Configuration")
+                    ax.set_xticks(range(len(metrics)))
                     ax.set_xticklabels(metrics, rotation=45)
                 except Exception as e:
                     logger.error(f"Error plotting {config}: {str(e)}")
