@@ -102,70 +102,158 @@ class EnhancedVisualization:
             raise
     
     def plot_privacy_performance_tradeoff(self, results: Dict) -> None:
-        """Plot privacy-performance tradeoff with edge case handling."""
+        """Plot privacy-performance tradeoff with detailed insights."""
         try:
-            # Validate required data
-            required_fields = ['metrics', 'configurations']
-            if not all(field in results for field in required_fields):
-                logger.error(f"Missing required fields for tradeoff plot: {required_fields}")
+            # Extract epsilon values and their corresponding metrics
+            epsilons = sorted(results.keys())
+            if not epsilons:
+                logger.error("No results to plot")
                 return
             
-            # Process data
-            processed_data = self._handle_numeric_data(results)
+            # Create figure with subplots
+            fig = plt.figure(figsize=(20, 15))
+            gs = fig.add_gridspec(3, 2)
             
-            # Create figure
-            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            # Plot 1: Performance Metrics
+            ax1 = fig.add_subplot(gs[0, 0])
+            performance_metrics = {
+                'throughput': [],
+                'latency': [],
+                'space_amplification': []
+            }
             
-            # Plot metrics
-            metrics = ['throughput', 'latency', 'space_amplification']
-            for i, metric in enumerate(metrics):
-                ax = axes[i//2, i%2]
-                try:
-                    if metric not in processed_data['metrics']:
-                        logger.warning(f"Missing metric {metric} for tradeoff plot")
-                        continue
-                        
-                    data = processed_data['metrics'][metric]
-                    if not isinstance(data, (int, float)):
-                        logger.warning(f"Invalid data type for metric {metric}")
-                        continue
-                        
-                    ax.plot([0, 1], [data, data])  # Simple line plot for now
-                    ax.set_title(f"{metric.capitalize()} vs Privacy")
-                    ax.set_xlabel("Privacy Level")
-                    ax.set_ylabel(metric.capitalize())
-                except Exception as e:
-                    logger.error(f"Error plotting {metric}: {str(e)}")
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
                     continue
+                    
+                for metric in performance_metrics.keys():
+                    try:
+                        avg_diff = np.mean([
+                            trial['privacy_metrics']['performance_differences'][metric]['difference_percent']
+                            for trial in trials
+                            if metric in trial['privacy_metrics']['performance_differences']
+                        ])
+                        performance_metrics[metric].append(avg_diff)
+                    except (KeyError, TypeError):
+                        performance_metrics[metric].append(0.0)
             
-            # Plot configuration comparison
-            try:
-                if 'original' in processed_data['configurations'] and 'private' in processed_data['configurations']:
-                    original = processed_data['configurations']['original']
-                    private = processed_data['configurations']['private']
+            for metric, values in performance_metrics.items():
+                if values:  # Only plot if we have data
+                    ax1.plot(epsilons, values, 'o-', label=metric.replace('_', ' ').title())
+            
+            ax1.set_title("Performance Impact vs Privacy Level")
+            ax1.set_xlabel("Epsilon (ε)")
+            ax1.set_ylabel("Average Performance Difference (%)")
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+            
+            # Plot 2: Configuration Changes
+            ax2 = fig.add_subplot(gs[0, 1])
+            config_metrics = {}
+            
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
+                    continue
                     
-                    # Compare metrics between configurations
-                    metrics = ['throughput', 'latency', 'space_amplification']
-                    values = {
-                        'Original': [original.get(m, 0) for m in metrics],
-                        'Private': [private.get(m, 0) for m in metrics]
-                    }
+                for trial in trials:
+                    try:
+                        for param, diff in trial['privacy_metrics']['configuration_differences'].items():
+                            if param not in config_metrics:
+                                config_metrics[param] = []
+                            config_metrics[param].append(diff['difference_percent'])
+                    except (KeyError, TypeError):
+                        continue
+            
+            if config_metrics:
+                for param, values in config_metrics.items():
+                    if values:  # Only plot if we have data
+                        ax2.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
+                ax2.set_title("Configuration Changes vs Privacy Level")
+            else:
+                ax2.text(0.5, 0.5, 'No significant configuration changes',
+                        horizontalalignment='center',
+                        verticalalignment='center',
+                        transform=ax2.transAxes)
+                ax2.set_title("Configuration Changes")
+            
+            ax2.set_xlabel("Epsilon (ε)")
+            ax2.set_ylabel("Average Configuration Difference (%)")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            
+            # Plot 3: Privacy-Utility Tradeoff Score
+            ax3 = fig.add_subplot(gs[1, :])
+            scores = {
+                'Performance': [],
+                'Configuration': [],
+                'Overall': []
+            }
+            
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
+                    continue
                     
-                    x = np.arange(len(metrics))
-                    width = 0.35
+                for score_type in scores.keys():
+                    try:
+                        avg_score = np.mean([
+                            trial['privacy_metrics']['privacy_utility_score'][f"{score_type.lower()}_score"]
+                            for trial in trials
+                        ])
+                        scores[score_type].append(avg_score)
+                    except (KeyError, TypeError):
+                        scores[score_type].append(0.0)
+            
+            for score_type, values in scores.items():
+                if values:  # Only plot if we have data
+                    ax3.plot(epsilons, values, 'o-', label=score_type)
+            
+            ax3.set_title("Privacy-Utility Tradeoff Scores")
+            ax3.set_xlabel("Epsilon (ε)")
+            ax3.set_ylabel("Score (0-100)")
+            ax3.grid(True, alpha=0.3)
+            ax3.legend()
+            
+            # Plot 4: Performance Impact Levels
+            ax4 = fig.add_subplot(gs[2, :])
+            impact_levels = {
+                'Negligible': [],
+                'Minor': [],
+                'Moderate': [],
+                'Significant': []
+            }
+            
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
+                    continue
                     
-                    ax = axes[1, 1]
-                    ax.bar(x - width/2, values['Original'], width, label='Original')
-                    ax.bar(x + width/2, values['Private'], width, label='Private')
-                    
-                    ax.set_title("Configuration Comparison")
-                    ax.set_xticks(x)
-                    ax.set_xticklabels(metrics)
-                    ax.legend()
-                else:
-                    logger.warning("Missing configuration data for comparison")
-            except Exception as e:
-                logger.error(f"Error plotting configuration comparison: {str(e)}")
+                for impact in impact_levels.keys():
+                    try:
+                        count = sum(
+                            1 for trial in trials
+                            for metric in trial['privacy_metrics']['performance_differences'].values()
+                            if metric['impact'] == impact
+                        )
+                        impact_levels[impact].append(count / len(trials) * 100)
+                    except (KeyError, TypeError):
+                        impact_levels[impact].append(0.0)
+            
+            x = np.arange(len(epsilons))
+            width = 0.2
+            for i, (impact, values) in enumerate(impact_levels.items()):
+                if values:  # Only plot if we have data
+                    ax4.bar(x + i*width, values, width, label=impact)
+            
+            ax4.set_title("Distribution of Performance Impact Levels")
+            ax4.set_xlabel("Epsilon (ε)")
+            ax4.set_ylabel("Percentage of Trials (%)")
+            ax4.set_xticks(x + width*1.5)
+            ax4.set_xticklabels(epsilons)
+            ax4.grid(True, alpha=0.3)
+            ax4.legend()
             
             plt.tight_layout()
             self._save_figure("privacy_performance_tradeoff.png")
@@ -220,38 +308,43 @@ class EnhancedVisualization:
     def plot_configuration_differences(self, results: Dict) -> None:
         """Plot configuration differences with edge case handling."""
         try:
-            # Validate required data
-            if 'configurations' not in results:
-                logger.error("Missing configuration data")
-                return
+            # Extract epsilon values and configuration parameters
+            epsilons = sorted(results.keys())
+            config_params = set()
             
-            # Process data
-            processed_data = self._handle_numeric_data(results)
+            # Get all unique configuration parameters
+            for epsilon in epsilons:
+                for trial in results[epsilon]:
+                    params = trial['comparison']['parameter_differences'].keys()
+                    config_params.update(params)
+            
+            # Prepare data for each parameter
+            param_data = {param: [] for param in config_params}
+            
+            # Collect data for each epsilon and parameter
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                for param in config_params:
+                    # Calculate average difference percentage across trials
+                    avg_diff = np.mean([
+                        trial['comparison']['parameter_differences'][param]['difference_percent']
+                        for trial in trials
+                        if param in trial['comparison']['parameter_differences']
+                    ])
+                    param_data[param].append(avg_diff)
             
             # Create figure
-            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            fig, ax = plt.subplots(figsize=(12, 8))
             
-            # Plot configurations
-            configs = ['original', 'private']
-            metrics = ['throughput', 'latency', 'space_amplification']
+            # Plot each parameter
+            for param, values in param_data.items():
+                ax.plot(epsilons, values, 'o-', label=param)
             
-            for i, config in enumerate(configs):
-                ax = axes[i//2, i%2]
-                try:
-                    if config not in processed_data['configurations']:
-                        logger.warning(f"Missing configuration {config}")
-                        continue
-                        
-                    config_data = processed_data['configurations'][config]
-                    values = [config_data.get(m, 0) for m in metrics]
-                    
-                    ax.bar(metrics, values)
-                    ax.set_title(f"{config.title()} Configuration")
-                    ax.set_xticks(range(len(metrics)))
-                    ax.set_xticklabels(metrics, rotation=45)
-                except Exception as e:
-                    logger.error(f"Error plotting {config}: {str(e)}")
-                    continue
+            ax.set_title("Configuration Parameter Differences vs Privacy")
+            ax.set_xlabel("Epsilon (ε)")
+            ax.set_ylabel("Average Difference Percentage")
+            ax.grid(True, alpha=0.3)
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
             
             plt.tight_layout()
             self._save_figure("configuration_differences.png")
