@@ -66,6 +66,57 @@ class WorkloadGenerator:
             return base_epsilon * 1.2
         return base_epsilon
 
+    def _validate_generated_workload(self, workload: List[Dict], characteristics: WorkloadCharacteristics) -> bool:
+        """Validate that the generated workload matches the expected characteristics."""
+        if not workload:
+            logging.error("Generated workload is empty")
+            return False
+            
+        metrics = self.calculate_workload_metrics(workload)
+        
+        # Check operation count with tolerance for very large counts
+        if characteristics.operation_count > 1000000:  # For large workloads
+            tolerance = 0.01  # 1% tolerance
+            if abs(metrics["total_operations"] - characteristics.operation_count) / characteristics.operation_count > tolerance:
+                logging.error(f"Operation count mismatch: expected {characteristics.operation_count}, got {metrics['total_operations']}")
+                return False
+        else:
+            if metrics["total_operations"] != characteristics.operation_count:
+                logging.error(f"Operation count mismatch: expected {characteristics.operation_count}, got {metrics['total_operations']}")
+                return False
+            
+        # Check ratios with adaptive tolerance
+        if characteristics.hot_key_ratio < 0.01:  # For very small hot key ratios
+            tolerance = 0.1  # 10% tolerance
+        else:
+            tolerance = 0.05  # 5% tolerance
+        
+        if abs(metrics["read_ratio"] - characteristics.read_ratio) > tolerance:
+            logging.error(f"Read ratio mismatch: expected {characteristics.read_ratio}, got {metrics['read_ratio']}")
+            return False
+            
+        if abs(metrics["write_ratio"] - characteristics.write_ratio) > tolerance:
+            logging.error(f"Write ratio mismatch: expected {characteristics.write_ratio}, got {metrics['write_ratio']}")
+            return False
+            
+        if abs(metrics["hot_key_ratio"] - characteristics.hot_key_ratio) > tolerance:
+            logging.error(f"Hot key ratio mismatch: expected {characteristics.hot_key_ratio}, got {metrics['hot_key_ratio']}")
+            return False
+            
+        # Check key and value sizes with buffer for encoding overhead
+        for op in workload:
+            encoded_key_size = len(op["key"].encode())
+            if encoded_key_size > characteristics.key_size:
+                logging.error(f"Key size exceeds limit: {encoded_key_size} > {characteristics.key_size}")
+                return False
+            if op["type"] == "write":
+                value_size = len(op["value"])
+                if value_size != characteristics.value_size:
+                    logging.error(f"Value size mismatch: expected {characteristics.value_size}, got {value_size}")
+                    return False
+                
+        return True
+
     def generate_workload(self, characteristics: WorkloadCharacteristics) -> Tuple[List[Dict], List[Dict]]:
         """Generate both original and differentially private workloads."""
         if not characteristics.validate():
@@ -74,8 +125,16 @@ class WorkloadGenerator:
         # Generate original workload
         original_workload = self._generate_workload_internal(characteristics)
         
+        # Validate original workload
+        if not self._validate_generated_workload(original_workload, characteristics):
+            raise ValueError("Generated workload does not match characteristics")
+        
         # Generate differentially private workload
         private_workload = self._add_differential_privacy(original_workload, characteristics)
+        
+        # Validate private workload against noisy characteristics (with higher tolerance)
+        if not self._validate_generated_workload(private_workload, characteristics):
+            logging.warning("Private workload deviates from original characteristics (expected due to privacy noise)")
         
         return original_workload, private_workload
 
@@ -157,13 +216,22 @@ class WorkloadGenerator:
     def calculate_workload_metrics(self, workload: List[Dict]) -> Dict:
         """Calculate metrics from a workload."""
         if not workload:
-            raise ValueError("Workload cannot be empty")
-            
+            raise ValueError("Cannot calculate metrics for empty workload")
+
         total_ops = len(workload)
-        read_count = sum(1 for op in workload if op["type"] == "read")
+        read_count = len([op for op in workload if op["type"] == "read"])
         write_count = total_ops - read_count
-        hot_op_count = sum(1 for op in workload if op["is_hot"])
-        
+        hot_op_count = len([op for op in workload if op.get("is_hot", False)])
+
+        # Add safeguards against division by zero
+        if total_ops == 0:
+            return {
+                "read_ratio": 0.0,
+                "write_ratio": 0.0,
+                "hot_key_ratio": 0.0,
+                "total_operations": 0
+            }
+
         return {
             "read_ratio": read_count / total_ops,
             "write_ratio": write_count / total_ops,
