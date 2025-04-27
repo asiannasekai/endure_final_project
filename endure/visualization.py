@@ -6,7 +6,6 @@ privacy-performance tradeoffs, workload sensitivity, and configuration impacts.
 """
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
 import os
@@ -21,10 +20,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VisualizationConfig:
     """Configuration for visualization settings."""
-    style: str = "whitegrid"
+    style: str = "default"
     figure_size: Tuple[int, int] = (12, 8)
     font_size: int = 12
-    color_palette: str = "husl"
+    color_palette: str = "viridis"
     dpi: int = 300
 
 class EnhancedVisualization:
@@ -62,10 +61,12 @@ class EnhancedVisualization:
     def _setup_plotting_style(self) -> None:
         """Setup plotting style with error handling."""
         try:
-            plt.style.use('seaborn')
-            sns.set_context("paper")
-            plt.rcParams['figure.figsize'] = (12, 8)
-            plt.rcParams['font.size'] = 12
+            # Use a valid style from matplotlib
+            plt.style.use('default')  # Use default style instead of seaborn
+            plt.rcParams['figure.figsize'] = self.config.figure_size
+            plt.rcParams['font.size'] = self.config.font_size
+            plt.rcParams['axes.grid'] = True  # Add grid by default
+            plt.rcParams['grid.alpha'] = 0.3  # Make grid lines slightly transparent
         except Exception as e:
             logger.error(f"Error setting up plotting style: {str(e)}")
             raise
@@ -284,20 +285,27 @@ class EnhancedVisualization:
                         correlation_matrix[i, j] = 1.0 if k1 == k2 else 0.5
             
             # Create figure
-            fig, ax = plt.subplots(figsize=(12, 8))
+            fig, ax = plt.subplots(figsize=self.config.figure_size)
             
-            # Plot correlation matrix
-            sns.heatmap(
-                correlation_matrix,
-                ax=ax,
-                xticklabels=list(all_data.keys()),
-                yticklabels=list(all_data.keys()),
-                annot=True,
-                cmap='coolwarm',
-                center=0
-            )
+            # Plot correlation matrix using matplotlib
+            im = ax.imshow(correlation_matrix, cmap='coolwarm', vmin=-1, vmax=1)
             
+            # Add colorbar
+            cbar = ax.figure.colorbar(im, ax=ax)
+            cbar.ax.set_ylabel('Correlation', rotation=-90, va="bottom")
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_data)))
+            ax.set_yticks(np.arange(len(all_data)))
+            ax.set_xticklabels(list(all_data.keys()), rotation=45, ha='right')
+            ax.set_yticklabels(list(all_data.keys()))
+            
+            # Add grid
+            ax.grid(True, alpha=0.3)
+            
+            # Add title
             ax.set_title("Metric Correlation Analysis")
+            
             plt.tight_layout()
             self._save_figure("correlation_analysis.png")
             
