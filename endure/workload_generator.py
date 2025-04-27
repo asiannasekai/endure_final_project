@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
+import logging
 
 @dataclass
 class WorkloadCharacteristics:
@@ -13,14 +14,50 @@ class WorkloadCharacteristics:
     hot_key_ratio: float  # Ratio of operations on hot keys
     hot_key_count: int  # Number of hot keys
 
+    def validate(self) -> bool:
+        """Validate workload characteristics."""
+        if not 0 <= self.read_ratio <= 1:
+            logging.error("read_ratio must be between 0 and 1")
+            return False
+        if not 0 <= self.write_ratio <= 1:
+            logging.error("write_ratio must be between 0 and 1")
+            return False
+        if abs(self.read_ratio + self.write_ratio - 1.0) > 1e-6:
+            logging.error("read_ratio + write_ratio must equal 1")
+            return False
+        if self.key_size <= 0:
+            logging.error("key_size must be positive")
+            return False
+        if self.value_size <= 0:
+            logging.error("value_size must be positive")
+            return False
+        if self.operation_count <= 0:
+            logging.error("operation_count must be positive")
+            return False
+        if not 0 <= self.hot_key_ratio <= 1:
+            logging.error("hot_key_ratio must be between 0 and 1")
+            return False
+        if self.hot_key_count <= 0:
+            logging.error("hot_key_count must be positive")
+            return False
+        return True
+
 class WorkloadGenerator:
-    def __init__(self, epsilon: float = 1.0):
+    def __init__(self, epsilon: float = 1.0, batch_size: int = 1000):
         """Initialize workload generator with privacy parameter epsilon."""
+        if epsilon <= 0:
+            raise ValueError("epsilon must be positive")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+            
         self.epsilon = epsilon
-        self.batch_size = 1000
+        self.batch_size = batch_size
 
     def get_adaptive_epsilon(self, characteristics: WorkloadCharacteristics) -> float:
         """Get adaptive epsilon based on workload characteristics."""
+        if not characteristics.validate():
+            raise ValueError("Invalid workload characteristics")
+            
         base_epsilon = self.epsilon
         # Adjust epsilon based on workload patterns
         if characteristics.hot_key_ratio > 0.3:
@@ -31,6 +68,9 @@ class WorkloadGenerator:
 
     def generate_workload(self, characteristics: WorkloadCharacteristics) -> Tuple[List[Dict], List[Dict]]:
         """Generate both original and differentially private workloads."""
+        if not characteristics.validate():
+            raise ValueError("Invalid workload characteristics")
+            
         # Generate original workload
         original_workload = self._generate_workload_internal(characteristics)
         
@@ -116,6 +156,9 @@ class WorkloadGenerator:
 
     def calculate_workload_metrics(self, workload: List[Dict]) -> Dict:
         """Calculate metrics from a workload."""
+        if not workload:
+            raise ValueError("Workload cannot be empty")
+            
         total_ops = len(workload)
         read_count = sum(1 for op in workload if op["type"] == "read")
         write_count = total_ops - read_count

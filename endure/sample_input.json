@@ -1,0 +1,45 @@
+{
+    "metrics": {
+        "throughput": {
+            "original": 1000,
+            "private": 950
+        },
+        "latency": {
+            "original": 10,
+            "private": 12
+        },
+        "space_amplification": {
+            "original": 1.5,
+            "private": 1.8
+        }
+    },
+    "configurations": {
+        "original": {
+            "read_ratio": 0.7,
+            "write_ratio": 0.3,
+            "key_size": 16,
+            "value_size": 128,
+            "operation_count": 10000,
+            "hot_key_ratio": 0.2,
+            "hot_key_count": 100
+        },
+        "private": {
+            "read_ratio": 0.65,
+            "write_ratio": 0.35,
+            "key_size": 16,
+            "value_size": 128,
+            "operation_count": 10000,
+            "hot_key_ratio": 0.25,
+            "hot_key_count": 100
+        }
+    },
+    "workload_characteristics": {
+        "read_ratio": 0.7,
+        "write_ratio": 0.3,
+        "key_size": 16,
+        "value_size": 128,
+        "operation_count": 10000,
+        "hot_key_ratio": 0.2,
+        "hot_key_count": 100
+    }
+} 
