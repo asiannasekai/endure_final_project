@@ -470,13 +470,39 @@ class PrivacyAnalysis:
             results = {}
             for eps_str, trials in raw_results.items():
                 try:
+                    # Convert string to float
                     epsilon = float(eps_str)
-                    if not isinstance(epsilon, (int, float)) or epsilon <= 0:
-                        logger.warning(f"Invalid epsilon value: {eps_str}")
+                    
+                    # Validate epsilon value
+                    if epsilon <= 0:
+                        logger.warning(f"Invalid epsilon value: {eps_str} (must be positive)")
                         continue
-                    results[epsilon] = trials
+                        
+                    # Validate trials data
+                    if not isinstance(trials, list):
+                        logger.warning(f"Invalid trials data for epsilon {eps_str}: {type(trials)}")
+                        continue
+                        
+                    # Convert any string values in trials to appropriate types
+                    processed_trials = []
+                    for trial in trials:
+                        if not isinstance(trial, dict):
+                            logger.warning(f"Invalid trial data format for epsilon {eps_str}")
+                            continue
+                            
+                        processed_trial = {}
+                        for key, value in trial.items():
+                            if key == 'privacy_metrics':
+                                processed_trial[key] = self._process_privacy_metrics(value)
+                            else:
+                                processed_trial[key] = value
+                                
+                        processed_trials.append(processed_trial)
+                    
+                    results[epsilon] = processed_trials
+                    
                 except (ValueError, TypeError) as e:
-                    logger.warning(f"Error converting epsilon value {eps_str}: {str(e)}")
+                    logger.warning(f"Error processing epsilon value {eps_str}: {str(e)}")
                     continue
 
             # Validate the converted results
@@ -488,6 +514,52 @@ class PrivacyAnalysis:
 
         except Exception as e:
             logger.error(f"Error loading results: {str(e)}")
+            return {}
+
+    def _process_privacy_metrics(self, metrics: Dict) -> Dict:
+        """Process privacy metrics data, converting string values to appropriate types."""
+        try:
+            processed_metrics = {}
+            
+            # Process performance differences
+            if 'performance_differences' in metrics:
+                processed_metrics['performance_differences'] = {}
+                for metric, value in metrics['performance_differences'].items():
+                    if isinstance(value, (int, float)):
+                        processed_metrics['performance_differences'][metric] = {
+                            'difference_percent': float(value)
+                        }
+                    elif isinstance(value, dict):
+                        processed_metrics['performance_differences'][metric] = {
+                            'difference_percent': float(value.get('difference_percent', 0.0))
+                        }
+            
+            # Process configuration differences
+            if 'configuration_differences' in metrics:
+                processed_metrics['configuration_differences'] = {}
+                for param, value in metrics['configuration_differences'].items():
+                    if isinstance(value, (int, float)):
+                        processed_metrics['configuration_differences'][param] = {
+                            'difference_percent': float(value)
+                        }
+                    elif isinstance(value, dict):
+                        processed_metrics['configuration_differences'][param] = {
+                            'difference_percent': float(value.get('difference_percent', 0.0))
+                        }
+            
+            # Process privacy utility score
+            if 'privacy_utility_score' in metrics:
+                processed_metrics['privacy_utility_score'] = {}
+                for score_type, value in metrics['privacy_utility_score'].items():
+                    if isinstance(value, (int, float)):
+                        processed_metrics['privacy_utility_score'][score_type] = float(value)
+                    elif isinstance(value, dict):
+                        processed_metrics['privacy_utility_score'][score_type] = float(value.get('score', 0.0))
+            
+            return processed_metrics
+            
+        except Exception as e:
+            logger.error(f"Error processing privacy metrics: {str(e)}")
             return {}
 
 def main():
