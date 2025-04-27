@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from endure.cli import main as cli_main
 from endure.config import ConfigManager
+from endure.workload_generator import WorkloadGenerator, WorkloadCharacteristics
+from endure.endure_integration import EndureIntegration
 
 def validate_input_data(data: dict) -> bool:
     """Validate input data structure."""
@@ -38,6 +40,55 @@ def setup_directories():
             logging.error(f"Error creating directory {dir_name}: {str(e)}")
             sys.exit(1)
 
+def generate_experimental_data(epsilon: float = 1.0) -> dict:
+    """Generate experimental data using workload generator."""
+    # Define workload characteristics
+    characteristics = WorkloadCharacteristics(
+        read_ratio=0.7,
+        write_ratio=0.3,
+        key_size=16,
+        value_size=100,
+        operation_count=100000,
+        hot_key_ratio=0.2,
+        hot_key_count=100
+    )
+    
+    # Initialize workload generator
+    generator = WorkloadGenerator(epsilon=epsilon)
+    
+    # Generate workloads
+    original_workload, private_workload = generator.generate_workload(characteristics)
+    
+    # Calculate metrics
+    original_metrics = generator.calculate_workload_metrics(original_workload)
+    private_metrics = generator.calculate_workload_metrics(private_workload)
+    
+    # Initialize Endure integration
+    integration = EndureIntegration(epsilon)
+    
+    # Run experiments
+    original_results = integration.run_endure_tuning(original_workload)
+    private_results = integration.run_endure_tuning(private_workload)
+    
+    # Prepare input data
+    input_data = {
+        "metrics": {
+            "throughput": original_results["performance_metrics"]["throughput"],
+            "latency": original_results["performance_metrics"]["latency"],
+            "space_amplification": original_results["performance_metrics"]["space_amplification"]
+        },
+        "configurations": {
+            "original": original_results["performance_metrics"],
+            "private": private_results["performance_metrics"]
+        },
+        "workload_characteristics": {
+            "read_ratio": characteristics.read_ratio,
+            "write_ratio": characteristics.write_ratio
+        }
+    }
+    
+    return input_data
+
 def run_experiments():
     """Run all experiments."""
     # Setup logging
@@ -48,22 +99,6 @@ def run_experiments():
     logger = logging.getLogger(__name__)
     
     try:
-        # Check input file exists
-        if not os.path.exists('input_data.json'):
-            logger.error("Input file not found: input_data.json")
-            sys.exit(1)
-            
-        # Load and validate input data
-        try:
-            with open('input_data.json', 'r') as f:
-                input_data = json.load(f)
-            if not validate_input_data(input_data):
-                logger.error("Invalid input data structure")
-                sys.exit(1)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON in input file")
-            sys.exit(1)
-        
         # Setup directories
         setup_directories()
         logger.info("Directories setup complete")
@@ -75,6 +110,15 @@ def run_experiments():
         else:
             config_manager = ConfigManager('config.json')
         logger.info("Configuration loaded")
+        
+        # Generate experimental data
+        logger.info("Generating experimental data...")
+        input_data = generate_experimental_data()
+        
+        # Save input data
+        with open('input_data.json', 'w') as f:
+            json.dump(input_data, f, indent=2)
+        logger.info("Experimental data saved to input_data.json")
         
         # Run privacy analysis
         logger.info("Running privacy analysis...")
