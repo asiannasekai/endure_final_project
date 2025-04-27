@@ -1,17 +1,8 @@
 {
     "metrics": {
-        "throughput": {
-            "original": 1000,
-            "private": 950
-        },
-        "latency": {
-            "original": 10,
-            "private": 12
-        },
-        "space_amplification": {
-            "original": 1.5,
-            "private": 1.8
-        }
+        "throughput": 1000,
+        "latency": 10,
+        "space_amplification": 1.5
     },
     "configurations": {
         "original": {

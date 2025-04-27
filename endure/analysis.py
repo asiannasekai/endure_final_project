@@ -55,9 +55,15 @@ class AnalysisResult:
             if not self.workload_characteristics:
                 logger.error("No workload characteristics provided")
                 return False
-            if not all(0 <= v <= 1 for v in self.workload_characteristics.values()):
-                logger.error("Invalid workload characteristics values (must be between 0 and 1)")
-                return False
+            
+            # Only check ratio values are between 0 and 1
+            ratio_fields = ['read_ratio', 'write_ratio', 'hot_key_ratio']
+            for field in ratio_fields:
+                if field in self.workload_characteristics:
+                    value = self.workload_characteristics[field]
+                    if not 0 <= value <= 1:
+                        logger.error(f"Invalid ratio value for {field} (must be between 0 and 1): {value}")
+                        return False
             
             return True
         except Exception as e:
