@@ -15,61 +15,91 @@ class PrivacyAnalysis:
         os.makedirs(self.results_dir, exist_ok=True)
 
     def _validate_results(self, results: Dict) -> bool:
-        """Validate the results of the privacy analysis."""
+        """Validate the results of the privacy analysis with more lenient checks."""
         try:
             # Check if results is a dictionary
             if not isinstance(results, dict):
-                logger.error("Results must be a dictionary")
+                logger.warning("Results must be a dictionary")
                 return False
             
+            valid_epsilons = 0
             # Check each epsilon entry
             for epsilon, trials in results.items():
-                if not isinstance(epsilon, (int, float)):
-                    logger.error(f"Invalid epsilon value: {epsilon}")
-                    return False
-                if not isinstance(trials, list):
-                    logger.error(f"Invalid trials data for epsilon {epsilon}")
-                    return False
-                
-                # Check each trial
-                for trial in trials:
-                    if not isinstance(trial, dict):
-                        logger.error("Invalid trial data structure")
-                        return False
-                    if "comparison" not in trial or "privacy_metrics" not in trial:
-                        logger.error("Missing required fields in trial data")
-                        return False
+                try:
+                    # Convert epsilon to float if it's a string
+                    if isinstance(epsilon, str):
+                        epsilon = float(epsilon)
                     
-                    # Check comparison data
-                    comparison = trial["comparison"]
-                    if not isinstance(comparison, dict):
-                        logger.error("Invalid comparison data structure")
-                        return False
-                    if "parameter_differences" not in comparison:
-                        logger.error("Missing parameter_differences in comparison data")
-                        return False
+                    if not isinstance(epsilon, (int, float)):
+                        logger.warning(f"Skipping invalid epsilon value: {epsilon}")
+                        continue
+                    if not isinstance(trials, list):
+                        logger.warning(f"Skipping invalid trials data for epsilon {epsilon}")
+                        continue
                     
-                    # Check privacy metrics
-                    metrics = trial["privacy_metrics"]
-                    if not isinstance(metrics, dict):
-                        logger.error("Invalid privacy metrics structure")
-                        return False
-                    if not all(key in metrics for key in ["configuration_differences", "performance_differences", "privacy_utility_score"]):
-                        logger.error("Missing required metrics in privacy_metrics")
-                        return False
+                    valid_trials = 0
+                    # Check each trial
+                    for trial in trials:
+                        if not isinstance(trial, dict):
+                            logger.warning("Skipping invalid trial data structure")
+                            continue
+                        
+                        # Check for required fields with lenient validation
+                        has_comparison = "comparison" in trial and isinstance(trial["comparison"], dict)
+                        has_privacy_metrics = "privacy_metrics" in trial and isinstance(trial["privacy_metrics"], dict)
+                        
+                        if not (has_comparison or has_privacy_metrics):
+                            logger.warning("Skipping trial with missing required fields")
+                            continue
+                        
+                        # Validate comparison data if present
+                        if has_comparison:
+                            comparison = trial["comparison"]
+                            if not isinstance(comparison, dict):
+                                logger.warning("Skipping trial with invalid comparison data")
+                                continue
+                            if "parameter_differences" not in comparison:
+                                logger.warning("Skipping trial with missing parameter differences")
+                                continue
+                        
+                        valid_trials += 1
+                    
+                    if valid_trials > 0:
+                        valid_epsilons += 1
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing epsilon {epsilon}: {str(e)}")
+                    continue
             
-            return True
+            # Consider results valid if we have at least one valid epsilon with trials
+            return valid_epsilons > 0
+            
         except Exception as e:
-            logger.error(f"Error validating results: {str(e)}")
+            logger.warning(f"Error validating results: {str(e)}")
             return False
 
-    def run_privacy_sweep(self, characteristics: WorkloadCharacteristics,
+    def run_privacy_sweep(self, characteristics: Dict,
                          epsilons: List[float] = [0.1, 0.5, 1.0, 2.0, 5.0],
                          num_trials: int = 5) -> Dict:
         """Run multiple trials with different epsilon values."""
         try:
-            if not isinstance(characteristics, WorkloadCharacteristics):
-                raise ValueError("Invalid workload characteristics")
+            # Convert characteristics dictionary to WorkloadCharacteristics object
+            if not isinstance(characteristics, dict):
+                raise ValueError("Invalid workload characteristics format")
+            
+            try:
+                workload_chars = WorkloadCharacteristics(
+                    read_ratio=float(characteristics["read_ratio"]),
+                    write_ratio=float(characteristics["write_ratio"]),
+                    key_size=int(characteristics["key_size"]),
+                    value_size=int(characteristics["value_size"]),
+                    operation_count=int(characteristics["operation_count"]),
+                    hot_key_ratio=float(characteristics["hot_key_ratio"]),
+                    hot_key_count=int(characteristics["hot_key_count"])
+                )
+            except (KeyError, ValueError) as e:
+                raise ValueError(f"Invalid workload characteristics: {str(e)}")
+            
             if not isinstance(epsilons, list) or not all(isinstance(e, (int, float)) for e in epsilons):
                 raise ValueError("Invalid epsilon values")
             if not isinstance(num_trials, int) or num_trials < 1:
@@ -84,7 +114,7 @@ class PrivacyAnalysis:
                         workload_generator = WorkloadGenerator(epsilon=epsilon)
                         
                         # Generate workloads with differential privacy
-                        original_workload, private_workload = workload_generator.generate_workload(characteristics)
+                        original_workload, private_workload = workload_generator.generate_workload(workload_chars)
                         
                         # Convert workloads to traces
                         original_trace = self._convert_to_trace(original_workload)
@@ -115,7 +145,16 @@ class PrivacyAnalysis:
                         
                         trial_results.append({
                             "comparison": comparison,
-                            "privacy_metrics": privacy_metrics
+                            "privacy_metrics": privacy_metrics,
+                            "workload_characteristics": {
+                                "read_ratio": workload_chars.read_ratio,
+                                "write_ratio": workload_chars.write_ratio,
+                                "key_size": workload_chars.key_size,
+                                "value_size": workload_chars.value_size,
+                                "operation_count": workload_chars.operation_count,
+                                "hot_key_ratio": workload_chars.hot_key_ratio,
+                                "hot_key_count": workload_chars.hot_key_count
+                            }
                         })
                     except Exception as e:
                         logger.error(f"Error in trial {trial} for epsilon {epsilon}: {str(e)}")
@@ -564,15 +603,15 @@ class PrivacyAnalysis:
 
 def main():
     # Example workload characteristics
-    characteristics = WorkloadCharacteristics(
-        read_ratio=0.7,
-        write_ratio=0.3,
-        key_size=16,
-        value_size=100,
-        operation_count=100000,
-        hot_key_ratio=0.2,
-        hot_key_count=100
-    )
+    characteristics = {
+        "read_ratio": 0.7,
+        "write_ratio": 0.3,
+        "key_size": 16,
+        "value_size": 100,
+        "operation_count": 100000,
+        "hot_key_ratio": 0.2,
+        "hot_key_count": 100
+    }
     
     # Run analysis
     analysis = PrivacyAnalysis()

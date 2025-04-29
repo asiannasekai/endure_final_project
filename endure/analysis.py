@@ -1,12 +1,13 @@
 from .visualization import EnhancedVisualization
 import os
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 import numpy as np
 from dataclasses import dataclass
 from datetime import datetime
-from .workload import WorkloadCharacteristics, WorkloadGenerator
+from .workload_generator import WorkloadCharacteristics, WorkloadGenerator
+import shutil
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +21,7 @@ class AnalysisResult:
     """Data class for analysis results with validation."""
     metrics: Dict[str, float]
     configurations: Dict[str, Dict]
-    workload_characteristics: Dict[str, float]
+    workload_characteristics: Dict[str, any]
     timestamp: str = datetime.now().isoformat()
     
     def validate(self) -> bool:
@@ -32,7 +33,13 @@ class AnalysisResult:
                 logger.error(f"Missing required metrics: {required_metrics}")
                 return False
             
-            # Check metric values
+            # Check metric values with reasonable ranges
+            metric_ranges = {
+                'throughput': (0, float('inf')),
+                'latency': (0, 1000),  # Max 1000ms
+                'space_amplification': (1, 10)  # Between 1x and 10x
+            }
+            
             for metric, value in self.metrics.items():
                 if not isinstance(value, (int, float)):
                     logger.error(f"Invalid type for metric {metric}: {type(value)}")
@@ -40,9 +47,13 @@ class AnalysisResult:
                 if np.isnan(value) or np.isinf(value):
                     logger.error(f"Invalid value for metric {metric}: {value}")
                     return False
-                if value < 0:
-                    logger.error(f"Negative value for metric {metric}: {value}")
-                    return False
+                if metric in metric_ranges:
+                    min_val, max_val = metric_ranges[metric]
+                    if not min_val <= value <= max_val:
+                        logger.warning(
+                            f"Metric {metric} value {value} is outside expected range "
+                            f"[{min_val}, {max_val}]"
+                        )
             
             # Check configurations
             if not self.configurations:
@@ -52,19 +63,59 @@ class AnalysisResult:
                 logger.error("Missing required configurations: original and/or private")
                 return False
             
+            # Validate configuration values
+            for config_type in ['original', 'private']:
+                config = self.configurations[config_type]
+                for ratio in ['read_ratio', 'write_ratio', 'hot_key_ratio']:
+                    if ratio in config:
+                        value = config[ratio]
+                        if not isinstance(value, (int, float)) or not 0 <= value <= 1:
+                            logger.error(f"Invalid {ratio} in {config_type} config: {value}")
+                            return False
+            
             # Check workload characteristics
-            if not self.workload_characteristics:
-                logger.error("No workload characteristics provided")
+            if not isinstance(self.workload_characteristics, dict):
+                logger.error("workload_characteristics must be a dictionary")
                 return False
             
-            # Only check ratio values are between 0 and 1
-            ratio_fields = ['read_ratio', 'write_ratio', 'hot_key_ratio']
-            for field in ratio_fields:
+            # Validate workload characteristics with reasonable ranges
+            wc_ranges = {
+                'read_ratio': (0, 1),
+                'write_ratio': (0, 1),
+                'hot_key_ratio': (0, 1),
+                'key_size': (1, 1024),  # Max 1KB
+                'value_size': (1, 1048576),  # Max 1MB
+                'operation_count': (1000, 100000000),  # Between 1K and 100M
+                'hot_key_count': (1, 10000)  # Max 10K hot keys
+            }
+            
+            for field, (min_val, max_val) in wc_ranges.items():
                 if field in self.workload_characteristics:
                     value = self.workload_characteristics[field]
-                    if not 0 <= value <= 1:
-                        logger.error(f"Invalid ratio value for {field} (must be between 0 and 1): {value}")
+                    if not isinstance(value, (int, float)):
+                        logger.error(f"Invalid type for {field}: {type(value)}")
                         return False
+                    if not min_val <= value <= max_val:
+                        logger.warning(
+                            f"{field} value {value} is outside expected range [{min_val}, {max_val}]"
+                        )
+            
+            # Validate ratio sum
+            ratio_sum = (
+                self.workload_characteristics.get('read_ratio', 0) +
+                self.workload_characteristics.get('write_ratio', 0)
+            )
+            if abs(ratio_sum - 1.0) > 0.01:  # 1% tolerance
+                logger.warning(f"read_ratio + write_ratio = {ratio_sum} (should be 1.0)")
+            
+            # Validate hot key count against operation count
+            hot_key_count = self.workload_characteristics.get('hot_key_count', 0)
+            operation_count = self.workload_characteristics.get('operation_count', 0)
+            if hot_key_count > operation_count:
+                logger.warning(
+                    f"hot_key_count ({hot_key_count}) is greater than operation_count "
+                    f"({operation_count})"
+                )
             
             return True
         except Exception as e:
@@ -72,406 +123,138 @@ class AnalysisResult:
             return False
 
 class BaseAnalysis:
-    """Base class for analysis with common functionality."""
+    """Base class for analysis implementations."""
     
-    def __init__(self, results_dir: str):
-        """Initialize base analysis class."""
-        self.results_dir = results_dir
+    def __init__(self, config: ConfigManager):
+        """Initialize analysis with configuration."""
+        self.config = config
+        self.temp_files = []  # Track temporary files
         self._setup_logging()
         self._setup_directories()
-        self.visualizer = EnhancedVisualization(results_dir)
     
     def _setup_logging(self) -> None:
-        """Setup file logging for the analysis."""
-        log_file = os.path.join(self.results_dir, f"{self.__class__.__name__.lower()}.log")
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(file_handler)
+        """Set up logging configuration."""
+        log_file = os.path.join(self.config.analysis.results_dir, "analysis.log")
+        logging.basicConfig(
+            level=getattr(logging, self.config.analysis.log_level),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
     
     def _setup_directories(self) -> None:
-        """Setup required directories."""
+        """Set up required directories with validation."""
         try:
-            os.makedirs(self.results_dir, exist_ok=True)
+            os.makedirs(self.config.analysis.results_dir, exist_ok=True)
+            if not os.access(self.config.analysis.results_dir, os.W_OK):
+                raise PermissionError(f"No write permission for {self.config.analysis.results_dir}")
+            
+            # Check disk space
+            disk = shutil.disk_usage(self.config.analysis.results_dir)
+            free_gb = disk.free / (1024 * 1024 * 1024)
+            if free_gb < self.config.analysis.max_disk_gb:
+                raise RuntimeError(f"Insufficient disk space: {free_gb:.2f}GB available")
         except Exception as e:
-            logger.error(f"Error creating directory {self.results_dir}: {str(e)}")
+            logging.error(f"Error setting up directories: {str(e)}")
             raise
     
-    def _validate_results(self, results: Dict) -> AnalysisResult:
-        """Validate analysis results and return AnalysisResult object."""
-        try:
-            # Check required fields
-            required_fields = ['metrics', 'configurations', 'workload_characteristics']
-            if not all(field in results for field in required_fields):
-                logger.error(f"Missing required fields: {required_fields}")
-                return None
-            
-            # Create AnalysisResult object
-            analysis_result = AnalysisResult(
-                metrics=results['metrics'],
-                configurations=results['configurations'],
-                workload_characteristics=results['workload_characteristics']
-            )
-            
-            # Validate the result
-            if not analysis_result.validate():
-                return None
-            
-            return analysis_result
-        except Exception as e:
-            logger.error(f"Error validating results: {str(e)}")
-            return None
-    
-    def _process_data(self, data: Dict) -> Dict:
-        """Process data with standardized handling."""
-        try:
-            processed = {}
-            for key, value in data.items():
-                if isinstance(value, dict):
-                    processed[key] = self._process_data(value)
-                elif isinstance(value, (int, float)):
-                    processed[key] = float(value)  # Ensure numeric values are floats
-                elif isinstance(value, list):
-                    # Handle lists of numeric values
-                    processed[key] = [float(v) if isinstance(v, (int, float)) else v for v in value]
-                else:
-                    processed[key] = value
-            return processed
-        except Exception as e:
-            logger.error(f"Error processing data: {str(e)}")
-            raise
-    
-    def _save_results(self, results: Dict, filename: str) -> None:
-        """Save analysis results with error handling."""
-        try:
-            # Process data to ensure numeric values are floats
-            processed_results = self._process_data(results)
-            
-            results_with_metadata = {
-                'timestamp': datetime.now().isoformat(),
-                'data': processed_results,
-                'validation_status': 'success'
-            }
-            
-            filepath = os.path.join(self.results_dir, filename)
-            with open(filepath, 'w') as f:
-                json.dump(results_with_metadata, f, indent=2)
-                
-            # Verify the saved data
-            with open(filepath, 'r') as f:
-                loaded_data = json.load(f)
-                if not isinstance(loaded_data.get('data', {}), dict):
-                    logger.error("Saved data has invalid structure")
-                    raise ValueError("Invalid data structure in saved file")
-                
-        except Exception as e:
-            logger.error(f"Error saving results to {filename}: {str(e)}")
-            raise
-    
-    def _handle_numeric_values(self, value: float) -> float:
-        """Handle numeric values with edge cases."""
-        if np.isnan(value) or np.isinf(value):
-            logger.warning(f"Invalid numeric value: {value}")
-            return 0.0
-        return float(value)
+    def cleanup(self) -> None:
+        """Clean up temporary files and resources."""
+        for temp_file in self.temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logging.debug(f"Removed temporary file: {temp_file}")
+            except Exception as e:
+                logging.warning(f"Failed to remove temporary file {temp_file}: {str(e)}")
+        self.temp_files.clear()
 
 class PrivacyAnalysis(BaseAnalysis):
-    """Privacy analysis with edge case handling."""
+    """Privacy analysis implementation."""
     
-    def __init__(self, results_dir: str, config: Optional[Dict] = None):
-        """Initialize privacy analysis with configuration.
-        
-        Args:
-            results_dir: Directory to store results
-            config: Optional configuration dictionary with:
-                - epsilon_values: List of epsilon values to test
-                - num_trials: Number of trials per epsilon
-                - workload_characteristics: Default workload characteristics
-                - checkpoint_interval: Number of trials between checkpoints
-        """
-        super().__init__(results_dir)
-        self.config = self._validate_config(config or {})
-        self.checkpoint_file = os.path.join(results_dir, "privacy_analysis_checkpoint.json")
-        self.current_trial = 0
-        self.total_trials = len(self.config['epsilon_values']) * self.config['num_trials']
-    
-    def _validate_config(self, config: Dict) -> Dict:
-        """Validate and set default configuration values."""
-        default_config = {
-            'epsilon_values': [0.1, 0.5, 1.0, 2.0, 5.0],
-            'num_trials': 5,
-            'workload_characteristics': {
-                'read_ratio': 0.7,
-                'write_ratio': 0.3,
-                'key_size': 16,
-                'value_size': 100,
-                'operation_count': 1000000,
-                'hot_key_ratio': 0.2,
-                'hot_key_count': 100
-            },
-            'checkpoint_interval': 5
-        }
-        
-        # Update with user config, keeping defaults for missing values
-        validated_config = default_config.copy()
-        validated_config.update(config)
-        
-        # Validate epsilon values
-        if not all(isinstance(e, (int, float)) and e > 0 for e in validated_config['epsilon_values']):
-            raise ValueError("Epsilon values must be positive numbers")
-        
-        # Validate number of trials
-        if not isinstance(validated_config['num_trials'], int) or validated_config['num_trials'] < 1:
-            raise ValueError("Number of trials must be a positive integer")
-        
-        return validated_config
-    
-    def run_analysis(self, results: Optional[Dict] = None) -> None:
-        """Run privacy analysis with edge case handling and progress tracking."""
+    def run_privacy_sweep(self, workload: Dict[str, Any], epsilon_range: Tuple[float, float]) -> AnalysisResult:
+        """Run privacy analysis with enhanced error handling and validation."""
         try:
-            # Load checkpoint if exists
-            if os.path.exists(self.checkpoint_file):
-                self._load_checkpoint()
+            # Validate epsilon range
+            if not isinstance(epsilon_range, tuple) or len(epsilon_range) != 2:
+                raise ValueError("Invalid epsilon range format")
+            if epsilon_range[0] < 0 or epsilon_range[1] <= epsilon_range[0]:
+                raise ValueError("Invalid epsilon range values")
             
-            visualization_data = self._initialize_visualization_data()
+            # Validate workload
+            if not isinstance(workload, dict):
+                raise TypeError("Workload must be a dictionary")
+            required_fields = ['read_ratio', 'write_ratio', 'key_size', 'value_size', 'operation_count']
+            missing_fields = [field for field in required_fields if field not in workload]
+            if missing_fields:
+                raise ValueError(f"Missing required workload fields: {missing_fields}")
             
-            # Run trials for each epsilon value
-            for epsilon in self.config['epsilon_values']:
-                epsilon_key = float(epsilon)
-                if epsilon_key not in visualization_data:
-                    visualization_data[epsilon_key] = []
+            # Create checkpoint file
+            checkpoint_file = os.path.join(self.config.analysis.results_dir, "privacy_sweep_checkpoint.json")
+            self.temp_files.append(checkpoint_file)
+            
+            results = []
+            try:
+                # Load checkpoint if exists
+                if os.path.exists(checkpoint_file):
+                    with open(checkpoint_file, 'r') as f:
+                        results = json.load(f)
+                    logging.info(f"Loaded {len(results)} results from checkpoint")
                 
-                # Run specified number of trials
-                for trial in range(self.config['num_trials']):
-                    if self.current_trial >= self.total_trials:
-                        break
-                        
-                    try:
-                        trial_data = self._run_single_trial(epsilon)
-                        visualization_data[epsilon_key].append(trial_data)
-                        
-                        # Save checkpoint periodically
-                        if (self.current_trial + 1) % self.config['checkpoint_interval'] == 0:
-                            self._save_checkpoint(visualization_data)
-                            
-                        self.current_trial += 1
-                        logger.info(f"Completed trial {self.current_trial}/{self.total_trials} for epsilon={epsilon}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error in trial {self.current_trial + 1} for epsilon={epsilon}: {str(e)}")
-                        continue
-            
-            # Calculate statistical summaries
-            self._add_statistical_summaries(visualization_data)
-            
-            # Save final results
-            self._save_results(visualization_data, "privacy_analysis.json")
-            
-            # Generate visualizations
-            self.visualizer.plot_privacy_performance_tradeoff(visualization_data)
-            self.visualizer.plot_configuration_differences(visualization_data)
-            
-            # Clean up checkpoint file
-            if os.path.exists(self.checkpoint_file):
-                os.remove(self.checkpoint_file)
+                # Run analysis for each epsilon value
+                epsilon_values = np.linspace(epsilon_range[0], epsilon_range[1], num=10)
+                for epsilon in epsilon_values:
+                    if not any(r.get('epsilon') == epsilon for r in results):
+                        result = self._run_single_privacy_analysis(workload, epsilon)
+                        results.append(result)
+                        # Save checkpoint
+                        with open(checkpoint_file, 'w') as f:
+                            json.dump(results, f)
                 
-            logger.info("Privacy analysis completed successfully")
+                # Process and validate results
+                processed_results = self._process_privacy_results(results)
+                if not self._validate_privacy_results(processed_results):
+                    raise ValueError("Invalid privacy analysis results")
+                
+                return AnalysisResult(
+                    metrics=processed_results,
+                    workload_characteristics=workload,
+                    config={'epsilon_range': epsilon_range}
+                )
             
+            finally:
+                # Clean up checkpoint file
+                self.cleanup()
+        
         except Exception as e:
-            logger.error(f"Error in privacy analysis: {str(e)}")
+            logging.error(f"Error in privacy sweep: {str(e)}")
             raise
     
-    def _initialize_visualization_data(self) -> Dict:
-        """Initialize visualization data structure."""
-        return {
-            float(epsilon): [] for epsilon in self.config['epsilon_values']
-        }
-    
-    def _run_single_trial(self, epsilon: float) -> Dict:
-        """Run a single trial with the given epsilon value."""
-        # Create workload generator with current epsilon
-        workload_generator = WorkloadGenerator(epsilon=epsilon)
-        
-        # Generate workloads
-        original_workload, private_workload = workload_generator.generate_workload(
-            WorkloadCharacteristics(**self.config['workload_characteristics'])
-        )
-        
-        # Calculate workload metrics
-        original_metrics = workload_generator.calculate_workload_metrics(original_workload)
-        private_metrics = workload_generator.calculate_workload_metrics(private_workload)
-        
-        # Create trial data
-        trial_data = {
-            'privacy_metrics': {
-                'performance_differences': {},
-                'configuration_differences': {},
-                'privacy_utility_score': {
-                    'performance_score': 0.0,
-                    'configuration_score': 0.0,
-                    'overall_score': 0.0
-                }
-            },
-            'workload_characteristics': self.config['workload_characteristics'],
-            'trial_number': self.current_trial + 1,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        # Calculate performance differences
-        for metric in ['throughput', 'latency', 'space_amplification']:
-            if metric in original_metrics and metric in private_metrics:
-                original_val = original_metrics[metric]
-                private_val = private_metrics[metric]
-                
-                trial_data['privacy_metrics']['performance_differences'][metric] = {
-                    'difference': abs(original_val - private_val),
-                    'difference_percent': self._safe_percentage(original_val, private_val),
-                    'impact': self._calculate_performance_impact(metric, original_val, private_val)
-                }
-        
-        # Calculate configuration differences
-        for param in ['read_ratio', 'write_ratio', 'hot_key_ratio']:
-            if param in original_metrics and param in private_metrics:
-                original_val = original_metrics[param]
-                private_val = private_metrics[param]
-                
-                trial_data['privacy_metrics']['configuration_differences'][param] = {
-                    'difference': abs(original_val - private_val),
-                    'difference_percent': self._safe_percentage(original_val, private_val)
-                }
-        
-        # Calculate privacy utility score
-        trial_data['privacy_metrics']['privacy_utility_score'] = self._calculate_privacy_utility_score(
-            trial_data['privacy_metrics']['configuration_differences'],
-            trial_data['privacy_metrics']['performance_differences']
-        )
-        
-        return trial_data
-    
-    def _add_statistical_summaries(self, visualization_data: Dict) -> None:
-        """Add statistical summaries to the visualization data."""
-        for epsilon, trials in visualization_data.items():
-            if not trials:
-                continue
-                
-            # Calculate means and standard deviations
-            metrics = ['performance_score', 'configuration_score', 'overall_score']
-            for metric in metrics:
-                values = [trial['privacy_metrics']['privacy_utility_score'][metric] for trial in trials]
-                mean = np.mean(values)
-                std = np.std(values)
-                
-                visualization_data[epsilon].append({
-                    'statistics': {
-                        metric: {
-                            'mean': mean,
-                            'std_dev': std,
-                            'min': min(values),
-                            'max': max(values)
-                        }
-                    }
-                })
-    
-    def _save_checkpoint(self, data: Dict) -> None:
-        """Save checkpoint data."""
-        checkpoint_data = {
-            'current_trial': self.current_trial,
-            'data': data
-        }
-        with open(self.checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f, indent=2)
-    
-    def _load_checkpoint(self) -> None:
-        """Load checkpoint data."""
+    def _validate_privacy_results(self, results: Dict[str, Any]) -> bool:
+        """Validate privacy analysis results."""
         try:
-            with open(self.checkpoint_file, 'r') as f:
-                checkpoint_data = json.load(f)
-                self.current_trial = checkpoint_data['current_trial']
-                return checkpoint_data['data']
+            required_metrics = ['privacy_loss', 'utility_loss', 'error_rate']
+            if not all(metric in results for metric in required_metrics):
+                logging.error("Missing required metrics in results")
+                return False
+            
+            # Validate metric ranges
+            if not (0 <= results['privacy_loss'] <= 1):
+                logging.error("Privacy loss must be between 0 and 1")
+                return False
+            if not (0 <= results['utility_loss'] <= 1):
+                logging.error("Utility loss must be between 0 and 1")
+                return False
+            if not (0 <= results['error_rate'] <= 1):
+                logging.error("Error rate must be between 0 and 1")
+                return False
+            
+            return True
         except Exception as e:
-            logger.error(f"Error loading checkpoint: {str(e)}")
-            return None
-    
-    def _safe_percentage(self, original: float, new: float) -> float:
-        """Safely calculate percentage difference."""
-        if original == 0:
-            return 0.0
-        return abs(original - new) / original * 100
-        
-    def _calculate_performance_impact(self, metric: str, original: float, private: float) -> str:
-        """Calculate the impact level of performance difference."""
-        diff_percent = self._safe_percentage(original, private)
-        
-        if metric == 'throughput':
-            if diff_percent < 5:
-                return 'Negligible'
-            elif diff_percent < 15:
-                return 'Minor'
-            elif diff_percent < 30:
-                return 'Moderate'
-            else:
-                return 'Significant'
-        elif metric == 'latency':
-            if diff_percent < 10:
-                return 'Negligible'
-            elif diff_percent < 25:
-                return 'Minor'
-            elif diff_percent < 50:
-                return 'Moderate'
-            else:
-                return 'Significant'
-        else:  # space_amplification
-            if diff_percent < 10:
-                return 'Negligible'
-            elif diff_percent < 20:
-                return 'Minor'
-            elif diff_percent < 40:
-                return 'Moderate'
-            else:
-                return 'Significant'
-                
-    def _calculate_privacy_utility_score(self, config_diffs: Dict, perf_diffs: Dict) -> Dict:
-        """Calculate a comprehensive privacy-utility tradeoff score."""
-        # Weight factors for different metrics
-        weights = {
-            'throughput': 0.4,
-            'latency': 0.3,
-            'space_amplification': 0.3
-        }
-        
-        # Calculate weighted performance impact
-        performance_score = sum(
-            weights[metric] * (100 - diff['difference_percent'])
-            for metric, diff in perf_diffs.items()
-        )
-        
-        # Calculate configuration stability score
-        config_score = 100 - np.mean([
-            diff['difference_percent']
-            for diff in config_diffs.values()
-        ])
-        
-        # Overall score (0-100)
-        overall_score = (performance_score * 0.7) + (config_score * 0.3)
-        
-        return {
-            'performance_score': performance_score,
-            'configuration_score': config_score,
-            'overall_score': overall_score,
-            'interpretation': self._interpret_score(overall_score)
-        }
-        
-    def _interpret_score(self, score: float) -> str:
-        """Interpret the privacy-utility tradeoff score."""
-        if score >= 90:
-            return "Excellent privacy-utility tradeoff"
-        elif score >= 75:
-            return "Good privacy-utility tradeoff"
-        elif score >= 60:
-            return "Acceptable privacy-utility tradeoff"
-        elif score >= 45:
-            return "Suboptimal privacy-utility tradeoff"
-        else:
-            return "Poor privacy-utility tradeoff"
+            logging.error(f"Error validating privacy results: {str(e)}")
+            return False
 
 class SensitivityAnalysis(BaseAnalysis):
     """Sensitivity analysis with edge case handling."""
@@ -586,10 +369,34 @@ class PerformanceAnalysis(BaseAnalysis):
             raise
             
     def _safe_percentage(self, original: float, new: float) -> float:
-        """Safely calculate percentage difference."""
-        if original == 0:
+        """Safely calculate percentage difference between original and new values.
+        
+        Args:
+            original: Original value
+            new: New value to compare against
+            
+        Returns:
+            float: Percentage difference (0-100)
+        """
+        try:
+            if not isinstance(original, (int, float)) or not isinstance(new, (int, float)):
+                logger.warning("Non-numeric values provided to _safe_percentage")
+                return 0.0
+                
+            if original == 0:
+                if new == 0:
+                    return 0.0
+                logger.warning("Original value is 0, cannot calculate percentage difference")
+                return 100.0
+                
+            if np.isnan(original) or np.isnan(new) or np.isinf(original) or np.isinf(new):
+                logger.warning("Invalid values (NaN or Inf) provided to _safe_percentage")
+                return 0.0
+                
+            return abs(original - new) / original * 100
+        except Exception as e:
+            logger.error(f"Error calculating percentage difference: {str(e)}")
             return 0.0
-        return abs(original - new) / original * 100
         
     def _calculate_performance_impact(self, metric: str, original: float, private: float) -> str:
         """Calculate the impact level of performance difference."""

@@ -1,1 +1,46 @@
 results/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test and results
+test_results/
+workload_results/
+privacy_results/
+sensitivity_results/
+performance_results/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

@@ -7,6 +7,7 @@ import json
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import logging
+import psutil
 
 @dataclass
 class AnalysisConfig:
@@ -16,6 +17,8 @@ class AnalysisConfig:
     save_raw_data: bool = True
     validate_results: bool = True
     max_workers: int = 4
+    max_memory_gb: float = 8.0  # Maximum memory usage in GB
+    max_disk_gb: float = 10.0   # Maximum disk usage in GB
     
     def validate(self) -> bool:
         """Validate analysis configuration."""
@@ -25,6 +28,14 @@ class AnalysisConfig:
         if self.log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
             logging.error("Invalid log level")
             return False
+        if not isinstance(self.max_memory_gb, (int, float)) or self.max_memory_gb <= 0:
+            logging.error("max_memory_gb must be a positive number")
+            return False
+        if not isinstance(self.max_disk_gb, (int, float)) or self.max_disk_gb <= 0:
+            logging.error("max_disk_gb must be a positive number")
+            return False
+        if not os.path.isabs(self.results_dir):
+            self.results_dir = os.path.abspath(self.results_dir)
         return True
 
 @dataclass
@@ -60,6 +71,7 @@ class PrivacyConfig:
     epsilon_steps: int = 10
     delta: float = 1e-5
     noise_scale: float = 1.0
+    num_trials: int = 5
     
     def validate(self) -> bool:
         """Validate privacy configuration."""
@@ -77,6 +89,9 @@ class PrivacyConfig:
             return False
         if not isinstance(self.noise_scale, (int, float)) or self.noise_scale <= 0:
             logging.error("noise_scale must be a positive number")
+            return False
+        if not isinstance(self.num_trials, int) or self.num_trials < 1:
+            logging.error("num_trials must be a positive integer")
             return False
         return True
 
@@ -123,9 +138,45 @@ class ConfigManager:
         if config_file:
             self.load_config(config_file)
     
+    def validate_relationships(self) -> bool:
+        """Validate relationships between configurations."""
+        try:
+            # Validate privacy and performance relationships
+            if self.privacy.epsilon_range[1] > 10.0:
+                logging.warning("High epsilon values may significantly impact utility")
+            
+            # Validate resource constraints
+            total_ops = self.performance.operation_count * self.privacy.num_trials
+            est_memory = (total_ops * (self.performance.key_size + self.performance.value_size)) / (1024 * 1024 * 1024)
+            if est_memory > self.analysis.max_memory_gb:
+                logging.error(f"Estimated memory usage ({est_memory:.2f}GB) exceeds limit ({self.analysis.max_memory_gb}GB)")
+                return False
+            
+            # Validate visualization constraints
+            if self.visualization.figure_size[0] * self.visualization.figure_size[1] > 1000:
+                logging.warning("Large figure size may cause display issues")
+            
+            # Validate file paths
+            paths = [
+                self.analysis.results_dir,
+                self.visualization.output_dir,
+                self.performance.data_dir
+            ]
+            for path in paths:
+                if not os.path.isabs(path):
+                    path = os.path.abspath(path)
+                if not os.access(os.path.dirname(path), os.W_OK):
+                    logging.error(f"No write permission for path: {path}")
+                    return False
+            
+            return True
+        except Exception as e:
+            logging.error(f"Error validating configuration relationships: {str(e)}")
+            return False
+    
     def load_config(self, config_file: str) -> None:
         """
-        Load configuration from file.
+        Load configuration from file with enhanced validation.
         
         Args:
             config_file (str): Path to configuration file
@@ -148,17 +199,31 @@ class ConfigManager:
             if 'performance' in config_data:
                 self._update_config(self.performance, config_data['performance'])
             
-            # Validate configurations
+            # Validate individual configurations and relationships
             if not all([
                 self.analysis.validate(),
                 self.visualization.validate(),
                 self.privacy.validate(),
-                self.performance.validate()
+                self.performance.validate(),
+                self.validate_relationships()
             ]):
-                logging.error("Invalid configuration values")
+                logging.error("Invalid configuration values or relationships")
                 return
             
             logging.info(f"Configuration loaded from {config_file}")
+            
+            # Get system resources
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            # Set dynamic limits based on system resources
+            self.max_memory = min(8 * 1024 * 1024 * 1024, memory.total * 0.3)  # 8GB or 30% of total
+            self.max_disk = min(10 * 1024 * 1024 * 1024, disk.total * 0.2)  # 10GB or 20% of total
+            
+            logging.info(
+                f"Resource limits set to: Memory={self.max_memory / (1024 * 1024 * 1024):.2f}GB, "
+                f"Disk={self.max_disk / (1024 * 1024 * 1024):.2f}GB"
+            )
             
         except json.JSONDecodeError:
             logging.error(f"Invalid JSON in configuration file: {config_file}")
