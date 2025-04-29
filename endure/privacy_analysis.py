@@ -1,7 +1,8 @@
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Tuple, Any
 from .workload_generator import WorkloadGenerator, WorkloadCharacteristics
 from .endure_integration import EndureIntegration
+from .analysis import BaseAnalysis, AnalysisResult
 import matplotlib.pyplot as plt
 import json
 import os
@@ -9,78 +10,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class PrivacyAnalysis:
-    def __init__(self):
-        self.results_dir = "privacy_results"
-        os.makedirs(self.results_dir, exist_ok=True)
-
-    def _validate_results(self, results: Dict) -> bool:
-        """Validate the results of the privacy analysis with more lenient checks."""
-        try:
-            # Check if results is a dictionary
-            if not isinstance(results, dict):
-                logger.warning("Results must be a dictionary")
-                return False
-            
-            valid_epsilons = 0
-            # Check each epsilon entry
-            for epsilon, trials in results.items():
-                try:
-                    # Convert epsilon to float if it's a string
-                    if isinstance(epsilon, str):
-                        epsilon = float(epsilon)
-                    
-                    if not isinstance(epsilon, (int, float)):
-                        logger.warning(f"Skipping invalid epsilon value: {epsilon}")
-                        continue
-                    if not isinstance(trials, list):
-                        logger.warning(f"Skipping invalid trials data for epsilon {epsilon}")
-                        continue
-                    
-                    valid_trials = 0
-                    # Check each trial
-                    for trial in trials:
-                        if not isinstance(trial, dict):
-                            logger.warning("Skipping invalid trial data structure")
-                            continue
-                        
-                        # Check for required fields with lenient validation
-                        has_comparison = "comparison" in trial and isinstance(trial["comparison"], dict)
-                        has_privacy_metrics = "privacy_metrics" in trial and isinstance(trial["privacy_metrics"], dict)
-                        
-                        if not (has_comparison or has_privacy_metrics):
-                            logger.warning("Skipping trial with missing required fields")
-                            continue
-                        
-                        # Validate comparison data if present
-                        if has_comparison:
-                            comparison = trial["comparison"]
-                            if not isinstance(comparison, dict):
-                                logger.warning("Skipping trial with invalid comparison data")
-                                continue
-                            if "parameter_differences" not in comparison:
-                                logger.warning("Skipping trial with missing parameter differences")
-                                continue
-                        
-                        valid_trials += 1
-                    
-                    if valid_trials > 0:
-                        valid_epsilons += 1
-                    
-                except Exception as e:
-                    logger.warning(f"Error processing epsilon {epsilon}: {str(e)}")
-                    continue
-            
-            # Consider results valid if we have at least one valid epsilon with trials
-            return valid_epsilons > 0
-            
-        except Exception as e:
-            logger.warning(f"Error validating results: {str(e)}")
-            return False
+class PrivacyAnalysis(BaseAnalysis):
+    """Privacy analysis implementation with enhanced functionality."""
+    
+    def __init__(self, config=None, results_dir=None):
+        """Initialize privacy analysis with configuration and results directory."""
+        super().__init__(config)
+        if results_dir:
+            self.config.analysis.results_dir = results_dir
+        self._batch_size = 1000  # Number of operations per batch
+        self._progress_file = os.path.join(self.config.analysis.results_dir, "progress.json")
+        self.workload_generator = WorkloadGenerator()
+        self.integration = EndureIntegration()
 
     def run_privacy_sweep(self, characteristics: Dict,
                          epsilons: List[float] = [0.1, 0.5, 1.0, 2.0, 5.0],
-                         num_trials: int = 5) -> Dict:
+                         num_trials: int = 5) -> AnalysisResult:
         """Run multiple trials with different epsilon values."""
         try:
             # Convert characteristics dictionary to WorkloadCharacteristics object
@@ -110,11 +55,13 @@ class PrivacyAnalysis:
                 trial_results = []
                 for trial in range(num_trials):
                     try:
-                        # Create workload generator with current epsilon
-                        workload_generator = WorkloadGenerator(epsilon=epsilon)
+                        # Check resources before each trial
+                        self._check_resources()
                         
                         # Generate workloads with differential privacy
-                        original_workload, private_workload = workload_generator.generate_workload(workload_chars)
+                        original_workload, private_workload = self.workload_generator.generate_workload(
+                            workload_chars, epsilon=epsilon
+                        )
                         
                         # Convert workloads to traces
                         original_trace = self._convert_to_trace(original_workload)
@@ -123,14 +70,15 @@ class PrivacyAnalysis:
                         # Save traces
                         original_path = self._save_trace(original_trace, f"original_{epsilon}_{trial}")
                         private_path = self._save_trace(private_trace, f"private_{epsilon}_{trial}")
+                        self.temp_files.extend([original_path, private_path])
                         
                         # Run Endure tuning
-                        integration = EndureIntegration(epsilon)
-                        original_results = integration.run_endure_tuning(original_path)
-                        private_results = integration.run_endure_tuning(private_path)
+                        self.integration.epsilon = epsilon
+                        original_results = self.integration.run_endure_tuning(original_path)
+                        private_results = self.integration.run_endure_tuning(private_path)
                         
                         # Compare configurations
-                        comparison = integration.compare_configurations(
+                        comparison = self.integration.compare_configurations(
                             original_results["config"],
                             private_results["config"]
                         )
@@ -156,22 +104,32 @@ class PrivacyAnalysis:
                                 "hot_key_count": workload_chars.hot_key_count
                             }
                         })
+                        
+                        # Monitor resources after each trial
+                        self._monitor_resources()
+                        
                     except Exception as e:
                         logger.error(f"Error in trial {trial} for epsilon {epsilon}: {str(e)}")
                         continue
                 
                 results[epsilon] = trial_results
             
-            # Validate results before saving
-            if not self._validate_results(results):
-                raise ValueError("Invalid results generated")
+            # Process and validate results
+            processed_results = self._process_privacy_results(results)
+            if not self._validate_privacy_results(processed_results):
+                raise ValueError("Invalid privacy analysis results")
             
-            self._save_results(results)
-            return results
+            return AnalysisResult(
+                metrics=processed_results,
+                workload_characteristics=characteristics,
+                config={'epsilons': epsilons, 'num_trials': num_trials}
+            )
             
         except Exception as e:
             logger.error(f"Error in privacy sweep: {str(e)}")
             raise
+        finally:
+            self.cleanup()
 
     def _convert_to_trace(self, workload: List[Dict]) -> List[Dict]:
         """Convert workload to trace format."""
@@ -187,20 +145,14 @@ class PrivacyAnalysis:
 
     def _save_trace(self, trace: List[Dict], prefix: str) -> str:
         """Save trace to file."""
-        trace_dir = "workload_traces"
+        trace_dir = os.path.join(self.config.analysis.results_dir, "workload_traces")
         os.makedirs(trace_dir, exist_ok=True)
         
-        filename = f"{trace_dir}/{prefix}_trace.json"
+        filename = os.path.join(trace_dir, f"{prefix}_trace.json")
         with open(filename, 'w') as f:
             json.dump(trace, f)
         
         return filename
-
-    def _safe_percentage(self, original: float, new: float) -> float:
-        """Safely calculate percentage difference."""
-        if original == 0:
-            return 0.0
-        return abs(original - new) / original * 100
 
     def _calculate_privacy_metrics(self, original_config: Dict, private_config: Dict,
                                  original_perf: Dict, private_perf: Dict) -> Dict:
@@ -264,9 +216,15 @@ class PrivacyAnalysis:
             logger.error(f"Error calculating privacy metrics: {str(e)}")
             raise
 
+    def _safe_percentage(self, original: float, new: float) -> float:
+        """Safely calculate percentage difference."""
+        if original == 0:
+            return 0.0
+        return abs(original - new) / original * 100
+
     def _calculate_performance_impact(self, metric: str, original: float, private: float) -> str:
         """Calculate the impact level of performance difference."""
-        diff_percent = abs(original - private) / original * 100
+        diff_percent = self._safe_percentage(original, private)
         
         if metric == 'throughput':
             if diff_percent < 5:
@@ -340,266 +298,84 @@ class PrivacyAnalysis:
         else:
             return "Poor privacy-utility tradeoff"
 
-    def _save_results(self, results: Dict) -> None:
-        """Save analysis results to file."""
-        filename = f"{self.results_dir}/privacy_analysis_results.json"
-        with open(filename, 'w') as f:
-            json.dump(results, f, indent=2)
-
-    def plot_results(self, results: Dict) -> None:
-        """Plot privacy/utility tradeoff analysis."""
+    def _process_privacy_results(self, results: Dict) -> Dict:
+        """Process privacy analysis results."""
         try:
-            if not self._validate_results(results):
-                raise ValueError("Invalid results for plotting")
+            processed = {
+                'privacy_loss': [],
+                'utility_loss': [],
+                'error_rate': []
+            }
             
-            # Create visualization instance
-            viz = EnhancedVisualization(self.results_dir)
+            for epsilon, trials in results.items():
+                for trial in trials:
+                    metrics = trial['privacy_metrics']
+                    processed['privacy_loss'].append(metrics['privacy_loss'])
+                    processed['utility_loss'].append(metrics['utility_loss'])
+                    processed['error_rate'].append(metrics['error_rate'])
             
-            # Generate plots
-            viz.plot_privacy_performance_tradeoff(results)
-            viz.plot_configuration_differences(results)
-            
+            # Calculate statistics
+            return {
+                'privacy_loss': {
+                    'mean': np.mean(processed['privacy_loss']),
+                    'std': np.std(processed['privacy_loss']),
+                    'min': np.min(processed['privacy_loss']),
+                    'max': np.max(processed['privacy_loss'])
+                },
+                'utility_loss': {
+                    'mean': np.mean(processed['utility_loss']),
+                    'std': np.std(processed['utility_loss']),
+                    'min': np.min(processed['utility_loss']),
+                    'max': np.max(processed['utility_loss'])
+                },
+                'error_rate': {
+                    'mean': np.mean(processed['error_rate']),
+                    'std': np.std(processed['error_rate']),
+                    'min': np.min(processed['error_rate']),
+                    'max': np.max(processed['error_rate'])
+                }
+            }
         except Exception as e:
-            logger.error(f"Error plotting results: {str(e)}")
+            logger.error(f"Error processing privacy results: {str(e)}")
             raise
 
-    def _calculate_statistical_metrics(self, values: List[float]) -> Dict:
-        """Calculate statistical metrics with confidence intervals."""
+    def _validate_privacy_results(self, results: Dict) -> bool:
+        """Validate privacy analysis results."""
         try:
-            if not values:
-                return {
-                    'mean': 0.0,
-                    'std': 0.0,
-                    'ci_lower': 0.0,
-                    'ci_upper': 0.0,
-                    'min': 0.0,
-                    'max': 0.0
-                }
-                
-            values = np.array(values)
-            mean = np.mean(values)
-            std = np.std(values, ddof=1)  # Sample standard deviation
+            # Check required metrics
+            required_metrics = ['privacy_loss', 'utility_loss', 'error_rate']
+            missing_metrics = [metric for metric in required_metrics if metric not in results]
+            if missing_metrics:
+                logger.error(f"Missing required metrics in results: {missing_metrics}")
+                return False
             
-            # Calculate 95% confidence interval
-            n = len(values)
-            if n > 1:
-                ci = 1.96 * (std / np.sqrt(n))  # 95% CI
-                ci_lower = mean - ci
-                ci_upper = mean + ci
-            else:
-                ci_lower = mean
-                ci_upper = mean
-            
-            return {
-                'mean': float(mean),
-                'std': float(std),
-                'ci_lower': float(ci_lower),
-                'ci_upper': float(ci_upper),
-                'min': float(np.min(values)),
-                'max': float(np.max(values))
+            # Validate metric ranges
+            metric_ranges = {
+                'privacy_loss': (0, 1),
+                'utility_loss': (0, 1),
+                'error_rate': (0, 1)
             }
+            
+            for metric, (min_val, max_val) in metric_ranges.items():
+                value = results.get(metric)
+                if not isinstance(value, (int, float)):
+                    logger.error(f"Invalid type for {metric}: {type(value)}")
+                    return False
+                if not min_val <= value <= max_val:
+                    logger.warning(f"{metric} value {value} is outside valid range [{min_val}, {max_val}]")
+                    # Don't fail validation for out-of-range values, just warn
+            
+            # Validate consistency between metrics
+            if results['privacy_loss'] == 0 and results['utility_loss'] > 0.1:
+                logger.warning("Non-zero utility loss with zero privacy loss")
+            
+            if results['error_rate'] > 0.7:
+                logger.warning(f"High error rate detected: {results['error_rate']}")
+            
+            return True
         except Exception as e:
-            logger.error(f"Error calculating statistical metrics: {str(e)}")
-            return {
-                'mean': 0.0,
-                'std': 0.0,
-                'ci_lower': 0.0,
-                'ci_upper': 0.0,
-                'min': 0.0,
-                'max': 0.0
-            }
-
-    def _analyze_tuning_stability(self, results: Dict) -> Dict:
-        """Analyze tuning stability across different epsilon values."""
-        try:
-            stability_metrics = {}
-            
-            for epsilon, trials in results.items():
-                if not trials:
-                    continue
-                    
-                # Collect configuration differences
-                config_diffs = []
-                perf_diffs = {
-                    'throughput': [],
-                    'latency': [],
-                    'space_amplification': []
-                }
-                
-                for trial in trials:
-                    try:
-                        # Configuration differences
-                        for param_diff in trial['comparison']['parameter_differences'].values():
-                            config_diffs.append(param_diff['difference_percent'])
-                        
-                        # Performance differences
-                        for metric, diff in trial['privacy_metrics']['performance_differences'].items():
-                            if metric in perf_diffs:
-                                perf_diffs[metric].append(diff['difference_percent'])
-                    except (KeyError, TypeError):
-                        continue
-                
-                # Calculate statistical metrics
-                stability_metrics[epsilon] = {
-                    'configuration_stability': self._calculate_statistical_metrics(config_diffs),
-                    'performance_stability': {
-                        metric: self._calculate_statistical_metrics(values)
-                        for metric, values in perf_diffs.items()
-                    }
-                }
-            
-            return stability_metrics
-        except Exception as e:
-            logger.error(f"Error analyzing tuning stability: {str(e)}")
-            return {}
-
-    def _analyze_workload_patterns(self, results: Dict) -> Dict:
-        """Analyze workload patterns and their impact on tuning."""
-        try:
-            pattern_metrics = {}
-            
-            for epsilon, trials in results.items():
-                if not trials:
-                    continue
-                    
-                pattern_metrics[epsilon] = {
-                    'read_write_ratio': [],
-                    'hot_key_access': [],
-                    'operation_distribution': []
-                }
-                
-                for trial in trials:
-                    try:
-                        if 'workload_metrics' in trial:
-                            metrics = trial['workload_metrics']
-                            pattern_metrics[epsilon]['read_write_ratio'].append(
-                                metrics.get('read_ratio', 0.0)
-                            )
-                            pattern_metrics[epsilon]['hot_key_access'].append(
-                                metrics.get('hot_key_ratio', 0.0)
-                            )
-                            pattern_metrics[epsilon]['operation_distribution'].append(
-                                metrics.get('operation_distribution', {})
-                            )
-                    except (KeyError, TypeError):
-                        continue
-                
-                # Calculate statistical metrics for each pattern
-                for pattern, values in pattern_metrics[epsilon].items():
-                    if values and isinstance(values[0], (int, float)):
-                        pattern_metrics[epsilon][pattern] = self._calculate_statistical_metrics(values)
-            
-            return pattern_metrics
-        except Exception as e:
-            logger.error(f"Error analyzing workload patterns: {str(e)}")
-            return {}
-
-    def load_results(self) -> Dict[float, List]:
-        """Load results from file with proper type conversion for epsilon values."""
-        try:
-            results_path = os.path.join(self.results_dir, "privacy_analysis_results.json")
-            if not os.path.exists(results_path):
-                logger.error(f"Results file not found: {results_path}")
-                return {}
-
-            with open(results_path, 'r') as f:
-                raw_results = json.load(f)
-
-            # Convert string epsilon keys to float and validate
-            results = {}
-            for eps_str, trials in raw_results.items():
-                try:
-                    # Convert string to float
-                    epsilon = float(eps_str)
-                    
-                    # Validate epsilon value
-                    if epsilon <= 0:
-                        logger.warning(f"Invalid epsilon value: {eps_str} (must be positive)")
-                        continue
-                        
-                    # Validate trials data
-                    if not isinstance(trials, list):
-                        logger.warning(f"Invalid trials data for epsilon {eps_str}: {type(trials)}")
-                        continue
-                        
-                    # Convert any string values in trials to appropriate types
-                    processed_trials = []
-                    for trial in trials:
-                        if not isinstance(trial, dict):
-                            logger.warning(f"Invalid trial data format for epsilon {eps_str}")
-                            continue
-                            
-                        processed_trial = {}
-                        for key, value in trial.items():
-                            if key == 'privacy_metrics':
-                                processed_trial[key] = self._process_privacy_metrics(value)
-                            else:
-                                processed_trial[key] = value
-                                
-                        processed_trials.append(processed_trial)
-                    
-                    results[epsilon] = processed_trials
-                    
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Error processing epsilon value {eps_str}: {str(e)}")
-                    continue
-
-            # Validate the converted results
-            if not self._validate_results(results):
-                logger.error("Loaded results failed validation")
-                return {}
-
-            return results
-
-        except Exception as e:
-            logger.error(f"Error loading results: {str(e)}")
-            return {}
-
-    def _process_privacy_metrics(self, metrics: Dict) -> Dict:
-        """Process privacy metrics data, converting string values to appropriate types."""
-        try:
-            processed_metrics = {}
-            
-            # Process performance differences
-            if 'performance_differences' in metrics:
-                processed_metrics['performance_differences'] = {}
-                for metric, value in metrics['performance_differences'].items():
-                    if isinstance(value, (int, float)):
-                        processed_metrics['performance_differences'][metric] = {
-                            'difference_percent': float(value)
-                        }
-                    elif isinstance(value, dict):
-                        processed_metrics['performance_differences'][metric] = {
-                            'difference_percent': float(value.get('difference_percent', 0.0))
-                        }
-            
-            # Process configuration differences
-            if 'configuration_differences' in metrics:
-                processed_metrics['configuration_differences'] = {}
-                for param, value in metrics['configuration_differences'].items():
-                    if isinstance(value, (int, float)):
-                        processed_metrics['configuration_differences'][param] = {
-                            'difference_percent': float(value)
-                        }
-                    elif isinstance(value, dict):
-                        processed_metrics['configuration_differences'][param] = {
-                            'difference_percent': float(value.get('difference_percent', 0.0))
-                        }
-            
-            # Process privacy utility score
-            if 'privacy_utility_score' in metrics:
-                processed_metrics['privacy_utility_score'] = {}
-                for score_type, value in metrics['privacy_utility_score'].items():
-                    if isinstance(value, (int, float)):
-                        processed_metrics['privacy_utility_score'][score_type] = float(value)
-                    elif isinstance(value, dict):
-                        processed_metrics['privacy_utility_score'][score_type] = float(value.get('score', 0.0))
-            
-            return processed_metrics
-            
-        except Exception as e:
-            logger.error(f"Error processing privacy metrics: {str(e)}")
-            return {}
+            logger.error(f"Error validating privacy results: {str(e)}")
+            return False
 
 def main():
     # Example workload characteristics

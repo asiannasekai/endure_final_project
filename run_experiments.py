@@ -16,6 +16,7 @@ from typing import Optional, Dict, List
 from endure.config import ConfigManager
 from endure.cli import validate_input_data
 from endure.analysis import PrivacyAnalysis, SensitivityAnalysis, PerformanceAnalysis
+from datetime import datetime
 
 # Global state for cleanup
 TEMP_FILES = set()
@@ -137,28 +138,158 @@ def validate_config(config: ConfigManager) -> bool:
 def setup_directories() -> bool:
     """Setup required directories with error handling and cleanup."""
     try:
-        dirs = [
-            'data',
-            'results',
-            'results/privacy_results',
-            'results/sensitivity_results',
-            'results/performance_results',
-            'results/visualization',
-            'checkpoints',
-            'temp'
-        ]
+        # Define base directories
+        base_dirs = {
+            'data': 'data',
+            'results': 'results',
+            'checkpoints': 'checkpoints',
+            'logs': 'logs',
+            'temp': 'temp',
+            'tests': 'tests',
+            'backup': 'backup'
+        }
         
-        for dir_path in dirs:
+        # Define subdirectories
+        subdirs = {
+            'results': [
+                'privacy_results',
+                'sensitivity_results',
+                'performance_results',
+                'visualization',
+                'raw_data'
+            ],
+            'checkpoints': [
+                'privacy',
+                'sensitivity',
+                'performance',
+                'workload'
+            ],
+            'tests': [
+                'unit',
+                'integration',
+                'performance',
+                'results'
+            ],
+            'backup': [
+                'results',
+                'checkpoints',
+                'logs'
+            ]
+        }
+        
+        # Create base directories
+        for dir_name, dir_path in base_dirs.items():
             os.makedirs(dir_path, exist_ok=True)
+            logger.info(f"Created directory: {dir_path}")
             
+            # Create subdirectories if they exist
+            if dir_name in subdirs:
+                for subdir in subdirs[dir_name]:
+                    subdir_path = os.path.join(dir_path, subdir)
+                    os.makedirs(subdir_path, exist_ok=True)
+                    logger.info(f"Created subdirectory: {subdir_path}")
+            
+            # Verify write permissions
+            if not os.access(dir_path, os.W_OK):
+                raise PermissionError(f"No write permission for {dir_path}")
+            
+            # Check disk space for results and checkpoints
+            if dir_name in ['results', 'checkpoints', 'backup']:
+                disk = shutil.disk_usage(dir_path)
+                free_gb = disk.free / (1024 * 1024 * 1024)
+                if free_gb < 1:  # Need at least 1GB free
+                    raise RuntimeError(f"Insufficient disk space in {dir_path}: {free_gb:.2f}GB available")
+        
         # Register temp directory for cleanup
         TEMP_FILES.add('temp')
         return True
+        
     except PermissionError:
-        logging.error("Permission denied when creating directories")
+        logger.error("Permission denied when creating directories")
         return False
     except OSError as e:
-        logging.error(f"Error creating directories: {str(e)}")
+        logger.error(f"Error creating directories: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error setting up directories: {str(e)}")
+        return False
+
+def cleanup_directories() -> None:
+    """Clean up temporary directories and files."""
+    try:
+        # Clean up temp directory
+        temp_dir = 'temp'
+        if os.path.exists(temp_dir):
+            for root, dirs, files in os.walk(temp_dir, topdown=False):
+                for name in files:
+                    try:
+                        os.remove(os.path.join(root, name))
+                    except Exception as e:
+                        logger.warning(f"Failed to remove file {name}: {str(e)}")
+                for name in dirs:
+                    try:
+                        os.rmdir(os.path.join(root, name))
+                    except Exception as e:
+                        logger.warning(f"Failed to remove directory {name}: {str(e)}")
+            try:
+                os.rmdir(temp_dir)
+            except Exception as e:
+                logger.warning(f"Failed to remove temp directory: {str(e)}")
+        
+        # Clean up checkpoint files
+        checkpoint_dir = 'checkpoints'
+        if os.path.exists(checkpoint_dir):
+            for root, dirs, files in os.walk(checkpoint_dir):
+                for name in files:
+                    if name.endswith('.json'):
+                        try:
+                            os.remove(os.path.join(root, name))
+                        except Exception as e:
+                            logger.warning(f"Failed to remove checkpoint file {name}: {str(e)}")
+        
+        # Move old results to backup
+        backup_dir = 'backup'
+        if os.path.exists(backup_dir):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_subdir = os.path.join(backup_dir, timestamp)
+            os.makedirs(backup_subdir, exist_ok=True)
+            
+            # Move old results
+            for old_dir in ['privacy_results', 'sensitivity_results', 'performance_results']:
+                if os.path.exists(old_dir):
+                    try:
+                        shutil.move(old_dir, os.path.join(backup_subdir, old_dir))
+                    except Exception as e:
+                        logger.warning(f"Failed to move {old_dir} to backup: {str(e)}")
+        
+        logger.info("Directory cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during directory cleanup: {str(e)}")
+
+def setup_visualization_directories() -> bool:
+    """Setup directories for visualization outputs."""
+    try:
+        vis_dirs = {
+            'results/visualization': [
+                'privacy',
+                'sensitivity',
+                'performance',
+                'comparison'
+            ]
+        }
+        
+        for base_dir, subdirs in vis_dirs.items():
+            os.makedirs(base_dir, exist_ok=True)
+            logger.info(f"Created visualization directory: {base_dir}")
+            
+            for subdir in subdirs:
+                subdir_path = os.path.join(base_dir, subdir)
+                os.makedirs(subdir_path, exist_ok=True)
+                logger.info(f"Created visualization subdirectory: {subdir_path}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error setting up visualization directories: {str(e)}")
         return False
 
 def load_input_data(checkpoint: bool = True) -> Optional[dict]:
@@ -229,15 +360,24 @@ def run_analysis_with_retry(analysis_type: str, input_data: Dict, config: Config
             # Create appropriate analysis instance
             if analysis_type == 'privacy':
                 analysis = PrivacyAnalysis(config, output_dir)
+                # Privacy analysis uses run_privacy_sweep
+                result = analysis.run_privacy_sweep(
+                    input_data['workload_characteristics'],
+                    epsilon_range=(0.1, 5.0)  # Default epsilon range
+                )
+                if not result or not result.validate():
+                    raise ValueError("Invalid privacy analysis results")
             elif analysis_type == 'sensitivity':
                 analysis = SensitivityAnalysis(config)
+                analysis.run_analysis(input_data)
             elif analysis_type == 'performance':
                 analysis = PerformanceAnalysis(config)
+                analysis.run_analysis(input_data)
             else:
                 raise ValueError(f"Unknown analysis type: {analysis_type}")
             
-            # Run the analysis
-            analysis.run_analysis(input_data)
+            # Clean up analysis resources
+            analysis.cleanup()
             return True
         except Exception as e:
             if attempt < max_retries - 1:

@@ -18,6 +18,11 @@
     },
     "workload_characteristics": {
         "read_ratio": 0.7,
-        "write_ratio": 0.3
+        "write_ratio": 0.3,
+        "key_size": 16,
+        "value_size": 100,
+        "operation_count": 100000,
+        "hot_key_ratio": 0.2,
+        "hot_key_count": 100
     }
 } 
