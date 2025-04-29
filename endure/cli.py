@@ -112,14 +112,83 @@ def load_input_data(input_file: str) -> Dict[str, Any]:
             logger.info("No workload characteristics found, using defaults")
             data['workload_characteristics'] = {}
             
-        # Convert to WorkloadCharacteristics object
-        try:
-            data['workload_characteristics'] = WorkloadCharacteristics.from_dict(
-                data['workload_characteristics']
-            )
-        except Exception as e:
-            raise CLIError(f"Invalid workload characteristics: {str(e)}")
+        # Validate and normalize workload characteristics
+        wc = data['workload_characteristics']
+        if not isinstance(wc, dict):
+            raise CLIError("workload_characteristics must be a dictionary")
             
+        # Define default values with validation ranges
+        defaults = {
+            'read_ratio': {'value': 0.7, 'min': 0.0, 'max': 1.0},
+            'write_ratio': {'value': 0.3, 'min': 0.0, 'max': 1.0},
+            'key_size': {'value': 16, 'min': 1, 'max': 1024},
+            'value_size': {'value': 100, 'min': 1, 'max': 1048576},
+            'operation_count': {'value': 100000, 'min': 1000, 'max': 100000000},
+            'hot_key_ratio': {'value': 0.2, 'min': 0.0, 'max': 1.0},
+            'hot_key_count': {'value': 100, 'min': 1, 'max': 10000}
+        }
+        
+        # Validate and normalize ratio values
+        for ratio in ['read_ratio', 'write_ratio', 'hot_key_ratio']:
+            if ratio in wc:
+                try:
+                    value = float(wc[ratio])
+                    min_val = defaults[ratio]['min']
+                    max_val = defaults[ratio]['max']
+                    if not min_val <= value <= max_val:
+                        logger.warning(
+                            f"Invalid {ratio} value: {value} (must be between {min_val} and {max_val}). "
+                            f"Using default: {defaults[ratio]['value']}"
+                        )
+                        wc[ratio] = defaults[ratio]['value']
+                    else:
+                        wc[ratio] = value
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"Could not convert {ratio} to float. Using default: {defaults[ratio]['value']}"
+                    )
+                    wc[ratio] = defaults[ratio]['value']
+            else:
+                logger.info(f"Using default value for {ratio}: {defaults[ratio]['value']}")
+                wc[ratio] = defaults[ratio]['value']
+        
+        # Validate and normalize other values
+        for field in ['key_size', 'value_size', 'operation_count', 'hot_key_count']:
+            if field in wc:
+                try:
+                    value = int(wc[field])
+                    min_val = defaults[field]['min']
+                    max_val = defaults[field]['max']
+                    if not min_val <= value <= max_val:
+                        logger.warning(
+                            f"Invalid {field} value: {value} (must be between {min_val} and {max_val}). "
+                            f"Using default: {defaults[field]['value']}"
+                        )
+                        wc[field] = defaults[field]['value']
+                    else:
+                        wc[field] = value
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"Could not convert {field} to integer. Using default: {defaults[field]['value']}"
+                    )
+                    wc[field] = defaults[field]['value']
+            else:
+                logger.info(f"Using default value for {field}: {defaults[field]['value']}")
+                wc[field] = defaults[field]['value']
+        
+        # Validate ratio sum
+        ratio_sum = wc['read_ratio'] + wc['write_ratio']
+        if abs(ratio_sum - 1.0) > 0.01:  # 1% tolerance
+            logger.warning(
+                f"read_ratio + write_ratio = {ratio_sum} (should be 1.0). Normalizing..."
+            )
+            total = wc['read_ratio'] + wc['write_ratio']
+            wc['read_ratio'] = wc['read_ratio'] / total
+            wc['write_ratio'] = wc['write_ratio'] / total
+        
+        # Update the input data with normalized values
+        data['workload_characteristics'] = wc
+        
         return data
     except json.JSONDecodeError as e:
         raise CLIError(f"Invalid JSON in input file: {str(e)}")
@@ -259,107 +328,54 @@ def validate_input_data(data: Dict[str, Any]) -> bool:
         logger.error(f"Error validating input data: {str(e)}")
         return False
 
-def run_analysis(analysis_type: str, input_data: Dict[str, Any], config: ConfigManager, output_dir: Optional[str] = None) -> None:
-    """Run specified analysis type with improved error handling."""
+def run_analysis(input_file: str, output_dir: str = None) -> None:
+    """Run the analysis with improved error handling and validation."""
     try:
-        # Validate analysis type
-        valid_types = ['privacy', 'sensitivity', 'performance', 'all']
-        if analysis_type not in valid_types:
-            raise CLIError(f"Invalid analysis type: {analysis_type}. Must be one of {valid_types}")
-        
-        # Setup output directory
-        if output_dir:
-            try:
-                os.makedirs(output_dir, exist_ok=True)
-                
-                # Verify write permissions
-                test_file = os.path.join(output_dir, '.test_write')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                
-                # Check available disk space
-                stat = os.statvfs(output_dir)
-                free_space = stat.f_bavail * stat.f_frsize / (1024 * 1024)  # Convert to MB
-                if free_space < 1000:  # Less than 1GB
-                    logger.warning(f"Low disk space in output directory: {free_space:.2f}MB available")
-                
-            except Exception as e:
-                raise CLIError(f"Error creating or accessing output directory: {str(e)}")
-            config.analysis.results_dir = output_dir
-        
-        # Import analysis modules
-        try:
-            from .analysis import PrivacyAnalysis, SensitivityAnalysis, PerformanceAnalysis
-            from .workload_generator import WorkloadGenerator
-        except ImportError as e:
-            raise CLIError(f"Failed to import required modules: {str(e)}")
-        
-        # Create workload characteristics
-        try:
-            wc = input_data['workload_characteristics']
-            characteristics = WorkloadCharacteristics(
-                read_ratio=wc['read_ratio'],
-                write_ratio=wc['write_ratio'],
-                key_size=wc['key_size'],
-                value_size=wc['value_size'],
-                operation_count=wc['operation_count'],
-                hot_key_ratio=wc['hot_key_ratio'],
-                hot_key_count=wc['hot_key_count']
-            )
+        # Load and validate input data
+        input_data = load_input_data(input_file)
+        if not isinstance(input_data, dict):
+            raise CLIError("Input data must be a dictionary")
             
-            # Validate characteristics
-            if not characteristics.validate():
-                logger.warning("Workload characteristics validation failed, but continuing with provided values")
+        # Extract and validate workload characteristics
+        workload = input_data.get('workload_characteristics', {})
+        if not isinstance(workload, dict):
+            raise CLIError("Workload characteristics must be a dictionary")
+            
+        # Validate required fields
+        required_fields = [
+            'read_ratio', 'write_ratio', 'key_size', 'value_size',
+            'operation_count', 'hot_key_ratio', 'hot_key_count'
+        ]
+        missing_fields = [field for field in required_fields if field not in workload]
+        if missing_fields:
+            raise CLIError(f"Missing required workload fields: {', '.join(missing_fields)}")
+            
+        # Create output directory if not specified
+        if output_dir is None:
+            output_dir = os.path.join(os.path.dirname(input_file), 'results')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Initialize analysis
+        analysis = PrivacyAnalysis()
+        
+        # Run privacy sweep
+        try:
+            results = analysis.run_privacy_sweep(workload)
+            if not results:
+                raise CLIError("No results returned from privacy sweep")
                 
+            # Save results
+            output_file = os.path.join(output_dir, 'privacy_analysis.json')
+            with open(output_file, 'w') as f:
+                json.dump(results, f, indent=2)
+                
+            logger.info(f"Analysis completed successfully. Results saved to {output_file}")
+            
         except Exception as e:
-            raise CLIError(f"Error creating workload characteristics: {str(e)}")
-        
-        # Create visualization instance
-        viz = EnhancedVisualization(output_dir or "results")
-        
-        # Run analysis based on type
-        try:
-            if analysis_type in ['privacy', 'all']:
-                logger.info("Running privacy analysis...")
-                try:
-                    analysis = PrivacyAnalysis(config=config)
-                    results = analysis.run_privacy_sweep(
-                        workload=characteristics,
-                        epsilon_range=config.privacy.epsilon_range
-                    )
-                    viz.plot_privacy_performance_tradeoff(results)
-                except Exception as e:
-                    raise CLIError(f"Privacy analysis failed: {str(e)}")
+            raise CLIError(f"Error during privacy sweep: {str(e)}")
             
-            if analysis_type in ['sensitivity', 'all']:
-                logger.info("Running sensitivity analysis...")
-                try:
-                    analysis = SensitivityAnalysis(config=config)
-                    results = analysis.run_sensitivity_analysis(characteristics)
-                    viz.plot_workload_sensitivity(results)
-                except Exception as e:
-                    raise CLIError(f"Sensitivity analysis failed: {str(e)}")
-            
-            if analysis_type in ['performance', 'all']:
-                logger.info("Running performance analysis...")
-                try:
-                    analysis = PerformanceAnalysis(config=config)
-                    results = analysis.run_analysis(input_data)
-                    viz.plot_configuration_differences(results)
-                    viz.plot_correlation_analysis(results)
-                except Exception as e:
-                    raise CLIError(f"Performance analysis failed: {str(e)}")
-                
-        except CLIError:
-            raise
-        except Exception as e:
-            raise CLIError(f"Unexpected error in analysis: {str(e)}")
-            
-    except CLIError:
-        raise
     except Exception as e:
-        raise CLIError(f"Unexpected error in analysis: {str(e)}")
+        raise CLIError(f"Analysis failed: {str(e)}")
 
 def main() -> None:
     """Main entry point with improved error handling."""
@@ -377,7 +393,7 @@ def main() -> None:
         input_data = load_input_data(args.input)
         
         # Run analysis
-        run_analysis(args.analysis_type, input_data, config, args.output)
+        run_analysis(args.input, args.output)
         
         logger.info("Analysis completed successfully")
         

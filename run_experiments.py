@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, Dict, List
 from endure.config import ConfigManager
-from endure.cli import run_analysis, validate_input_data
+from endure.cli import validate_input_data
+from endure.analysis import PrivacyAnalysis, SensitivityAnalysis, PerformanceAnalysis
 
 # Global state for cleanup
 TEMP_FILES = set()
@@ -225,7 +226,18 @@ def run_analysis_with_retry(analysis_type: str, input_data: Dict, config: Config
     """Run analysis with retry logic for transient failures."""
     for attempt in range(max_retries):
         try:
-            run_analysis(analysis_type, input_data, config, output_dir)
+            # Create appropriate analysis instance
+            if analysis_type == 'privacy':
+                analysis = PrivacyAnalysis(config, output_dir)
+            elif analysis_type == 'sensitivity':
+                analysis = SensitivityAnalysis(config)
+            elif analysis_type == 'performance':
+                analysis = PerformanceAnalysis(config)
+            else:
+                raise ValueError(f"Unknown analysis type: {analysis_type}")
+            
+            # Run the analysis
+            analysis.run_analysis(input_data)
             return True
         except Exception as e:
             if attempt < max_retries - 1:
@@ -248,80 +260,64 @@ def main():
         # Check system resources
         logger.info("Checking system resources...")
         if not check_system_resources():
-            logger.error("Insufficient system resources")
-            sys.exit(1)
-        
-        # Create necessary directories
+            raise Exception("Insufficient system resources")
+            
+        # Setup directories
         logger.info("Setting up directories...")
         if not setup_directories():
-            logger.error("Failed to setup directories")
-            sys.exit(1)
-        
-        # Load and validate configuration
-        logger.info("Loading configuration...")
-        config_file = 'config.json' if os.path.exists('config.json') else None
-        config = ConfigManager(config_file)
-        
-        # Set visualization output directory
-        config.visualization.output_dir = 'results/visualization'
-        config.visualization.figure_size = (12, 8)
-        config.visualization.file_format = 'png'
-        
-        if not validate_config(config):
-            logger.error("Invalid configuration")
-            sys.exit(1)
-        
-        # Load and validate input data
+            raise Exception("Failed to setup directories")
+            
+        # Load input data
         logger.info("Loading input data...")
         input_data = load_input_data()
-        if input_data is None:
-            logger.error("Failed to load input data")
-            sys.exit(1)
+        if not input_data:
+            raise Exception("Failed to load input data")
             
-        # Run analyses with parallel execution where possible
-        try:
-            with ThreadPoolExecutor() as executor:
-                # Run privacy analysis (cannot be parallelized with others)
-                logger.info("Running privacy analysis...")
-                if not run_analysis_with_retry('privacy', input_data, config, 'results/privacy_results'):
-                    raise Exception("Privacy analysis failed")
+        # Load configuration
+        logger.info("Loading configuration...")
+        config = ConfigManager()
+        if not validate_config(config):
+            raise Exception("Invalid configuration")
+            
+        # Run analyses
+        logger.info("Starting analyses...")
+        
+        # Run privacy analysis (cannot be parallelized with others)
+        logger.info("Running privacy analysis...")
+        if not run_analysis_with_retry('privacy', input_data, config, 'results/privacy_results'):
+            raise Exception("Privacy analysis failed")
+            
+        # Run sensitivity and performance analyses in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_sensitivity = executor.submit(
+                run_analysis_with_retry,
+                'sensitivity',
+                input_data,
+                config,
+                'results/sensitivity_results'
+            )
+            future_performance = executor.submit(
+                run_analysis_with_retry,
+                'performance',
+                input_data,
+                config,
+                'results/performance_results'
+            )
+            
+            # Wait for completion
+            sensitivity_success = future_sensitivity.result()
+            performance_success = future_performance.result()
+            
+            if not sensitivity_success:
+                raise Exception("Sensitivity analysis failed")
+            if not performance_success:
+                raise Exception("Performance analysis failed")
                 
-                # Run sensitivity and performance analyses in parallel
-                future_sensitivity = executor.submit(
-                    run_analysis_with_retry, 
-                    'sensitivity', 
-                    input_data, 
-                    config, 
-                    'results/sensitivity_results'
-                )
-                future_performance = executor.submit(
-                    run_analysis_with_retry, 
-                    'performance', 
-                    input_data, 
-                    config, 
-                    'results/performance_results'
-                )
-                
-                # Wait for parallel analyses to complete
-                if not future_sensitivity.result():
-                    raise Exception("Sensitivity analysis failed")
-                if not future_performance.result():
-                    raise Exception("Performance analysis failed")
-            
-            logger.info("All experiments completed successfully!")
-            
-        except KeyboardInterrupt:
-            logger.info("Analysis interrupted by user")
-            sys.exit(0)
-        except Exception as e:
-            logger.error(f"Error during analysis: {str(e)}")
-            sys.exit(1)
-            
+        logger.info("All analyses completed successfully!")
+        
     except Exception as e:
-        logger.error(f"Critical error: {str(e)}")
+        logger.error(f"Error during execution: {str(e)}")
         sys.exit(1)
-    finally:
-        cleanup_resources()
 
 if __name__ == '__main__':
     main() 
