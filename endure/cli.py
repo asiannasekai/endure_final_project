@@ -11,6 +11,8 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass
 from .types import WorkloadCharacteristics, AnalysisResults, Metrics
+from .config import ConfigManager
+from .visualization import EnhancedVisualization
 import psutil
 
 # Get logger instance
@@ -80,10 +82,9 @@ def parse_args() -> argparse.Namespace:
     except Exception as e:
         raise CLIError(f"Error parsing arguments: {str(e)}")
 
-def load_config(config_file: Optional[str] = None) -> Any:
+def load_config(config_file: Optional[str] = None) -> ConfigManager:
     """Load and validate configuration."""
     try:
-        from .config import ConfigManager
         config = ConfigManager(config_file)
         
         # Validate configuration
@@ -91,8 +92,6 @@ def load_config(config_file: Optional[str] = None) -> Any:
             raise CLIError("Invalid configuration")
             
         return config
-    except ImportError:
-        raise CLIError("Failed to import configuration module")
     except Exception as e:
         raise CLIError(f"Error loading configuration: {str(e)}")
 
@@ -260,12 +259,7 @@ def validate_input_data(data: Dict[str, Any]) -> bool:
         logger.error(f"Error validating input data: {str(e)}")
         return False
 
-def run_analysis(
-    analysis_type: str,
-    input_data: Dict[str, Any],
-    config: Any,
-    output_dir: Optional[str] = None
-) -> None:
+def run_analysis(analysis_type: str, input_data: Dict[str, Any], config: ConfigManager, output_dir: Optional[str] = None) -> None:
     """Run specified analysis type with improved error handling."""
     try:
         # Validate analysis type
@@ -297,7 +291,7 @@ def run_analysis(
         # Import analysis modules
         try:
             from .analysis import PrivacyAnalysis, SensitivityAnalysis, PerformanceAnalysis
-            from .workload_generator import WorkloadGenerator, WorkloadCharacteristics
+            from .workload_generator import WorkloadGenerator
         except ImportError as e:
             raise CLIError(f"Failed to import required modules: {str(e)}")
         
@@ -321,68 +315,46 @@ def run_analysis(
         except Exception as e:
             raise CLIError(f"Error creating workload characteristics: {str(e)}")
         
+        # Create visualization instance
+        viz = EnhancedVisualization(output_dir or "results")
+        
         # Run analysis based on type
         try:
             if analysis_type in ['privacy', 'all']:
                 logger.info("Running privacy analysis...")
-                analysis = PrivacyAnalysis(results_dir=config.analysis.results_dir)
-                
-                # Validate privacy configuration
-                if not hasattr(config, 'privacy'):
-                    raise CLIError("Missing privacy configuration")
-                    
-                # Validate epsilon range
-                if not hasattr(config.privacy, 'epsilon_range'):
-                    raise CLIError("Missing epsilon_range in privacy configuration")
-                
                 try:
-                    epsilons = [float(e) for e in config.privacy.epsilon_range]
-                    if not all(e > 0 for e in epsilons):
-                        raise ValueError("All epsilon values must be positive")
-                    if len(epsilons) < 2:
-                        raise ValueError("At least two epsilon values are required")
-                except (ValueError, TypeError) as e:
-                    raise CLIError(f"Invalid epsilon values: {str(e)}")
-                
-                # Validate num_trials
-                if not hasattr(config.privacy, 'num_trials'):
-                    raise CLIError("Missing num_trials in privacy configuration")
-                try:
-                    num_trials = int(config.privacy.num_trials)
-                    if num_trials < 1:
-                        raise ValueError("num_trials must be positive")
-                    if num_trials > 1000:
-                        logger.warning(f"Large number of trials ({num_trials}) may impact performance")
-                except (ValueError, TypeError) as e:
-                    raise CLIError(f"Invalid num_trials: {str(e)}")
-                
-                results = analysis.run_privacy_sweep(
-                    characteristics={
-                        'read_ratio': characteristics.read_ratio,
-                        'write_ratio': characteristics.write_ratio,
-                        'key_size': characteristics.key_size,
-                        'value_size': characteristics.value_size,
-                        'operation_count': characteristics.operation_count,
-                        'hot_key_ratio': characteristics.hot_key_ratio,
-                        'hot_key_count': characteristics.hot_key_count
-                    },
-                    epsilons=epsilons,
-                    num_trials=num_trials
-                )
-                analysis.plot_results(results)
+                    analysis = PrivacyAnalysis(config=config)
+                    results = analysis.run_privacy_sweep(
+                        workload=characteristics,
+                        epsilon_range=config.privacy.epsilon_range
+                    )
+                    viz.plot_privacy_performance_tradeoff(results)
+                except Exception as e:
+                    raise CLIError(f"Privacy analysis failed: {str(e)}")
             
             if analysis_type in ['sensitivity', 'all']:
                 logger.info("Running sensitivity analysis...")
-                analysis = SensitivityAnalysis(results_dir=config.analysis.results_dir)
-                analysis.run_analysis(input_data)
+                try:
+                    analysis = SensitivityAnalysis(config=config)
+                    results = analysis.run_sensitivity_analysis(characteristics)
+                    viz.plot_workload_sensitivity(results)
+                except Exception as e:
+                    raise CLIError(f"Sensitivity analysis failed: {str(e)}")
             
             if analysis_type in ['performance', 'all']:
                 logger.info("Running performance analysis...")
-                analysis = PerformanceAnalysis(results_dir=config.analysis.results_dir)
-                analysis.run_analysis(input_data)
+                try:
+                    analysis = PerformanceAnalysis(config=config)
+                    results = analysis.run_analysis(input_data)
+                    viz.plot_configuration_differences(results)
+                    viz.plot_correlation_analysis(results)
+                except Exception as e:
+                    raise CLIError(f"Performance analysis failed: {str(e)}")
                 
+        except CLIError:
+            raise
         except Exception as e:
-            raise CLIError(f"Error during analysis: {str(e)}")
+            raise CLIError(f"Unexpected error in analysis: {str(e)}")
             
     except CLIError:
         raise

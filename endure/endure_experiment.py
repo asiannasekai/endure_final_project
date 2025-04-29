@@ -3,6 +3,7 @@ import time
 from typing import Dict, Tuple, List
 from .workload_generator import WorkloadGenerator, WorkloadCharacteristics
 from .rocksdb_config import RocksDBConfig, DEFAULT_CONFIG
+from .visualization import EnhancedVisualization
 import rocksdb
 
 class EndureExperiment:
@@ -11,6 +12,7 @@ class EndureExperiment:
         self.workload_generator = WorkloadGenerator(epsilon)
         self.db = None
         self.batch_size = 1000
+        self.visualization = EnhancedVisualization("results/visualization")
 
     def setup_db(self, config: RocksDBConfig) -> None:
         """Set up RocksDB with given configuration."""
@@ -82,12 +84,19 @@ class EndureExperiment:
         if self.db:
             self.db.close()
         
-        return {
+        # Create visualization
+        results = {
             "original_workload": original_metrics,
             "private_workload": private_metrics,
             "original_performance": original_performance,
             "private_performance": private_performance
         }
+        
+        # Generate visualizations
+        self.visualization.plot_workload_characteristics(results)
+        self.visualization.plot_privacy_performance_tradeoff(results)
+        
+        return results
 
 def main():
     # Example workload characteristics

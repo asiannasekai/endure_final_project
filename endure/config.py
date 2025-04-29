@@ -101,6 +101,7 @@ class PerformanceConfig:
     metrics: tuple = ("throughput", "latency", "space_amplification")
     workload_types: tuple = ("read_heavy", "write_heavy", "balanced")
     sample_size: int = 1000
+    operation_count: int = 100000  # Default number of operations
     
     def validate(self) -> bool:
         """Validate performance configuration."""
@@ -112,6 +113,9 @@ class PerformanceConfig:
             return False
         if not isinstance(self.sample_size, int) or self.sample_size < 1:
             logging.error("sample_size must be a positive integer")
+            return False
+        if not isinstance(self.operation_count, int) or self.operation_count < 1:
+            logging.error("operation_count must be a positive integer")
             return False
         return True
 

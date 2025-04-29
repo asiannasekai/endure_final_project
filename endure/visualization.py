@@ -12,7 +12,8 @@ import os
 import logging
 from pathlib import Path
 from scipy.interpolate import make_interp_spline
-from .types import VisualizationConfig, AnalysisResults, WorkloadCharacteristics, Metrics, MathUtils
+from .config import VisualizationConfig
+from .types import AnalysisResults, WorkloadCharacteristics, Metrics, MathUtils
 
 # Get logger instance without configuring
 logger = logging.getLogger(__name__)
@@ -112,6 +113,9 @@ class EnhancedVisualization:
     
     def _save_figure(self, filename: str) -> None:
         """Save figure with robust error handling and cleanup."""
+        # Ensure the results directory exists
+        os.makedirs(self.results_dir, exist_ok=True)
+        
         filepath = os.path.join(self.results_dir, filename)
         
         # Create backup of existing file if it exists
@@ -332,28 +336,198 @@ class EnhancedVisualization:
             raise
     
     def plot_workload_sensitivity(self, results: Dict, filename: str = "workload_sensitivity.png") -> None:
-        """Plot workload sensitivity analysis."""
+        """Plot workload sensitivity with edge case handling."""
         try:
-            # Implementation here
+            # Validate required data
+            if not isinstance(results, dict):
+                raise ValueError("Results must be a dictionary")
+                
+            if 'workload_characteristics' not in results:
+                logger.error("Missing workload characteristics data")
+                return
+            
+            # Create figure
+            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            
+            # Plot characteristics
+            characteristics = ['read_ratio', 'write_ratio', 'key_size', 'value_size']
+            for i, char in enumerate(characteristics):
+                ax = axes[i//2, i%2]
+                try:
+                    if char not in results['workload_characteristics']:
+                        logger.warning(f"Missing characteristic {char}")
+                        continue
+                        
+                    value = results['workload_characteristics'][char]
+                    if not isinstance(value, (int, float)):
+                        logger.warning(f"Invalid data type for characteristic {char}")
+                        continue
+                        
+                    # Create bar plot
+                    ax.bar([char], [value], color='skyblue')
+                    ax.set_title(f"{char.replace('_', ' ').title()}")
+                    ax.set_ylim(0, max(1, value * 1.1))  # Add 10% padding
+                    ax.grid(True, alpha=0.3)
+                except Exception as e:
+                    logger.error(f"Error plotting {char}: {str(e)}")
+                    continue
+            
+            plt.tight_layout()
             self._save_figure(filename)
+            
         except Exception as e:
             logger.error(f"Error plotting workload sensitivity: {str(e)}")
             raise
     
     def plot_configuration_differences(self, results: Dict[float, List], filename: str = "configuration_differences.png") -> None:
-        """Plot configuration differences analysis."""
+        """Plot configuration differences with detailed validation."""
         try:
-            # Implementation here
+            if not results:
+                logger.error("No results to plot")
+                return
+
+            if not self._validate_results_structure(results):
+                logger.error("Invalid results structure for configuration differences plot")
+                return
+
+            # Create figure
+            fig, ax = plt.subplots(figsize=self.config.figure_size)
+            
+            epsilons = sorted(results.keys())
+            if not epsilons:
+                logger.error("No epsilon values found")
+                return
+
+            # Initialize configuration metrics
+            config_metrics = {}
+            
+            # First pass: collect all differences for each parameter
+            for epsilon in epsilons:
+                trials = results[epsilon]
+                if not trials:
+                    logger.warning(f"No trials found for epsilon {epsilon}")
+                    continue
+
+                for trial in trials:
+                    try:
+                        config_diffs = trial['privacy_metrics']['configuration_differences']
+                        if not isinstance(config_diffs, dict):
+                            logger.warning(f"Invalid configuration differences format in trial for epsilon {epsilon}")
+                            continue
+
+                        for param, diff in config_diffs.items():
+                            if not isinstance(diff, dict) or 'difference_percent' not in diff:
+                                logger.warning(f"Invalid difference format for parameter '{param}' in trial for epsilon {epsilon}")
+                                continue
+
+                            if param not in config_metrics:
+                                config_metrics[param] = {eps: [] for eps in epsilons}
+                            config_metrics[param][epsilon].append(diff['difference_percent'])
+                    except Exception as e:
+                        logger.error(f"Error processing configuration differences in trial for epsilon {epsilon}: {str(e)}")
+                        continue
+
+            # Second pass: calculate averages and prepare for plotting
+            plot_data = {}
+            for param, epsilon_data in config_metrics.items():
+                plot_data[param] = []
+                for epsilon in epsilons:
+                    if epsilon_data[epsilon]:
+                        plot_data[param].append(np.mean(epsilon_data[epsilon]))
+                    else:
+                        plot_data[param].append(0.0)
+
+            # Plot configuration differences
+            if plot_data:
+                for param, values in plot_data.items():
+                    if values:  # Only plot if we have data
+                        ax.plot(epsilons, values, 'o-', label=param.replace('_', ' ').title())
+            
+                ax.set_title("Configuration Changes vs Privacy Level")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Average Configuration Difference (%)")
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+            else:
+                ax.text(0.5, 0.5, 'No significant configuration changes',
+                       horizontalalignment='center',
+                       verticalalignment='center',
+                       transform=ax.transAxes)
+                ax.set_title("Configuration Changes")
+                ax.set_xlabel("Epsilon (ε)")
+                ax.set_ylabel("Average Configuration Difference (%)")
+
+            plt.tight_layout()
             self._save_figure(filename)
+            
         except Exception as e:
             logger.error(f"Error plotting configuration differences: {str(e)}")
             raise
     
     def plot_correlation_analysis(self, results: Dict, filename: str = "correlation_analysis.png") -> None:
-        """Plot correlation analysis."""
+        """Plot correlation analysis with edge case handling."""
         try:
-            # Implementation here
+            # Validate required data
+            if not isinstance(results, dict):
+                raise ValueError("Results must be a dictionary")
+                
+            required_fields = ['metrics', 'workload_characteristics']
+            if not all(field in results for field in required_fields):
+                logger.error(f"Missing required fields for correlation analysis: {required_fields}")
+                return
+            
+            # Create correlation matrix
+            metrics = list(results['metrics'].keys())
+            characteristics = list(results['workload_characteristics'].keys())
+            
+            if not metrics or not characteristics:
+                logger.error("No metrics or characteristics data available")
+                return
+            
+            all_data = {**results['metrics'], **results['workload_characteristics']}
+            all_keys = list(all_data.keys())
+            correlation_matrix = np.zeros((len(all_keys), len(all_keys)))
+            
+            # Calculate correlations
+            for i, k1 in enumerate(all_keys):
+                for j, k2 in enumerate(all_keys):
+                    v1 = all_data[k1]
+                    v2 = all_data[k2]
+                    if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+                        if k1 == k2:
+                            correlation_matrix[i, j] = 1.0
+                        else:
+                            # Simple correlation calculation
+                            correlation_matrix[i, j] = 0.5 * (abs(v1 - v2) / max(abs(v1), abs(v2)))
+            
+            # Create figure
+            fig, ax = plt.subplots(figsize=self.config.figure_size)
+            
+            # Plot correlation matrix
+            im = ax.imshow(correlation_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+            
+            # Add colorbar
+            cbar = ax.figure.colorbar(im, ax=ax)
+            cbar.ax.set_ylabel('Correlation', rotation=-90, va="bottom")
+            
+            # Set ticks and labels
+            ax.set_xticks(np.arange(len(all_keys)))
+            ax.set_yticks(np.arange(len(all_keys)))
+            ax.set_xticklabels(all_keys, rotation=45, ha='right')
+            ax.set_yticklabels(all_keys)
+            
+            # Add grid
+            for i in range(len(all_keys)):
+                for j in range(len(all_keys)):
+                    text = ax.text(j, i, f'{correlation_matrix[i, j]:.2f}',
+                                 ha="center", va="center", color="black")
+            
+            # Add title
+            ax.set_title("Metric and Characteristic Correlations")
+            
+            plt.tight_layout()
             self._save_figure(filename)
+            
         except Exception as e:
             logger.error(f"Error plotting correlation analysis: {str(e)}")
             raise

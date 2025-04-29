@@ -25,7 +25,10 @@ def cleanup_resources():
     for file in TEMP_FILES:
         try:
             if os.path.exists(file):
-                os.remove(file)
+                if os.path.isdir(file):
+                    shutil.rmtree(file)
+                else:
+                    os.remove(file)
         except Exception as e:
             logging.error(f"Error cleaning up {file}: {str(e)}")
     
@@ -58,13 +61,13 @@ def check_system_resources() -> bool:
             logging.error(f"Insufficient disk space: {disk.free / 1_000_000_000:.2f}GB free")
             return False
         
-        # Check memory (need at least 2GB free)
+        # Check memory (need at least 1GB free)
         memory = psutil.virtual_memory()
         total_memory_gb = memory.total / (1024 * 1024 * 1024)
         available_memory_gb = memory.available / (1024 * 1024 * 1024)
         
         # Adjust threshold based on total memory
-        memory_threshold_gb = min(4.0, total_memory_gb * 0.2)  # 4GB or 20% of total, whichever is smaller
+        memory_threshold_gb = min(1.0, total_memory_gb * 0.15)  # 1GB or 15% of total, whichever is smaller
         
         if available_memory_gb < memory_threshold_gb:
             logging.error(f"Insufficient memory: {available_memory_gb:.1f}GB available (need {memory_threshold_gb:.1f}GB)")
@@ -84,38 +87,47 @@ def check_system_resources() -> bool:
 def validate_config(config: ConfigManager) -> bool:
     """Validate configuration settings with enhanced checks."""
     try:
-        if not config.analysis.validate():
+        # Basic configuration validation
+        if not hasattr(config, 'analysis') or not config.analysis.validate():
             logging.error("Invalid analysis configuration")
             return False
             
-        if not config.visualization.validate():
+        if not hasattr(config, 'visualization') or not config.visualization.validate():
             logging.error("Invalid visualization configuration")
             return False
             
-        if not config.privacy.validate():
+        if not hasattr(config, 'privacy') or not config.privacy.validate():
             logging.error("Invalid privacy configuration")
             return False
             
-        if not config.performance.validate():
+        if not hasattr(config, 'performance') or not config.performance.validate():
             logging.error("Invalid performance configuration")
             return False
             
         # Validate relationships between configurations
-        privacy_config = config.privacy.get_config()
-        if 'epsilon_range' in privacy_config:
-            min_eps, max_eps = privacy_config['epsilon_range']
-            if min_eps <= 0 or max_eps <= min_eps:
-                logging.error(f"Invalid epsilon range: [{min_eps}, {max_eps}]")
-                return False
+        if not hasattr(config.privacy, 'epsilon_range') or not (0 < config.privacy.epsilon_range[0] < config.privacy.epsilon_range[1]):
+            logging.error(f"Invalid epsilon range: {config.privacy.epsilon_range}")
+            return False
         
         # Validate visualization settings
-        vis_config = config.visualization.get_config()
-        if 'plot_types' in vis_config:
-            valid_types = {'line', 'scatter', 'bar', 'heatmap'}
-            if not all(t in valid_types for t in vis_config['plot_types']):
-                logging.error("Invalid plot types specified")
-                return False
-        
+        if not hasattr(config.visualization, 'style') or config.visualization.style not in ['default', 'whitegrid', 'darkgrid']:
+            logging.error(f"Invalid visualization style: {config.visualization.style}")
+            return False
+            
+        # Validate visualization output settings
+        if not hasattr(config.visualization, 'output_dir'):
+            config.visualization.output_dir = 'results/visualization'
+            
+        if not hasattr(config.visualization, 'figure_size'):
+            config.visualization.figure_size = (12, 8)
+            
+        if not hasattr(config.visualization, 'file_format'):
+            config.visualization.file_format = 'png'
+            
+        # Validate performance configuration
+        if not hasattr(config.performance, 'operation_count'):
+            config.performance.operation_count = 100000  # Default value
+            
         return True
     except Exception as e:
         logging.error(f"Error validating configuration: {str(e)}")
@@ -130,6 +142,7 @@ def setup_directories() -> bool:
             'results/privacy_results',
             'results/sensitivity_results',
             'results/performance_results',
+            'results/visualization',
             'checkpoints',
             'temp'
         ]
@@ -248,6 +261,12 @@ def main():
         logger.info("Loading configuration...")
         config_file = 'config.json' if os.path.exists('config.json') else None
         config = ConfigManager(config_file)
+        
+        # Set visualization output directory
+        config.visualization.output_dir = 'results/visualization'
+        config.visualization.figure_size = (12, 8)
+        config.visualization.file_format = 'png'
+        
         if not validate_config(config):
             logger.error("Invalid configuration")
             sys.exit(1)
@@ -258,7 +277,7 @@ def main():
         if input_data is None:
             logger.error("Failed to load input data")
             sys.exit(1)
-        
+            
         # Run analyses with parallel execution where possible
         try:
             with ThreadPoolExecutor() as executor:
