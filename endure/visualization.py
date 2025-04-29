@@ -271,11 +271,23 @@ class EnhancedVisualization:
             return False
 
     def _smooth_data(self, x: np.ndarray, y: np.ndarray, window_size: int = None) -> Tuple[np.ndarray, np.ndarray]:
-        """Apply smoothing to data points with robust error handling."""
+        """Smooth data using spline interpolation with enhanced error handling."""
         try:
             if window_size is None:
-                window_size = self.config.smoothing_window
-            return MathUtils.smooth_data(x, y, window_size)
+                window_size = self.config.smoothing_window if hasattr(self.config, 'smoothing_window') else 5
+            
+            if len(x) < 3:
+                return x, y
+            
+            # Create more points for smoother curve
+            x_new = np.linspace(min(x), max(x), 100)
+            
+            # Use spline interpolation
+            spline = make_interp_spline(x, y, k=3)
+            y_new = spline(x_new)
+            
+            return x_new, y_new
+            
         except Exception as e:
             logger.warning(f"Error smoothing data: {str(e)}")
             return x, y
@@ -315,18 +327,31 @@ class EnhancedVisualization:
                     means.append(metric_data['mean'])
                     stds.append(metric_data['std'])
                 
-                # Plot with error bars
-                axes[i].errorbar(epsilons, means, yerr=stds, fmt='o-', capsize=5)
+                # Convert to numpy arrays
+                epsilons = np.array(epsilons)
+                means = np.array(means)
+                stds = np.array(stds)
                 
-                # Add smoothed curve if enough points
+                # Plot with error bars
+                axes[i].errorbar(epsilons, means, yerr=stds, fmt='o', capsize=5, label='Data Points')
+                
+                # Add smoothed curve
+                x_smooth, y_smooth = self._smooth_data(epsilons, means)
+                axes[i].plot(x_smooth, y_smooth, '--', alpha=0.7, label='Smoothed Trend')
+                
+                # Add polynomial fit
                 if len(epsilons) > 3:
-                    x_smooth, y_smooth = self._smooth_data(np.array(epsilons), np.array(means))
-                    axes[i].plot(x_smooth, y_smooth, '--', alpha=0.5)
+                    coeffs = np.polyfit(epsilons, means, 2)
+                    poly = np.poly1d(coeffs)
+                    x_poly = np.linspace(min(epsilons), max(epsilons), 100)
+                    y_poly = poly(x_poly)
+                    axes[i].plot(x_poly, y_poly, '-', alpha=0.5, label='Quadratic Fit')
                 
                 axes[i].set_xlabel('Epsilon')
                 axes[i].set_ylabel(f'{metric.capitalize()} Difference (%)')
                 axes[i].set_title(f'Privacy-Performance Tradeoff: {metric.capitalize()}')
-                axes[i].grid(True)
+                axes[i].grid(True, alpha=0.3)
+                axes[i].legend()
             
             plt.tight_layout()
             self._save_figure(filename)
