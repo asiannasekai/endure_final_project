@@ -33,14 +33,20 @@ env/
 *.swp
 *.swo
 
-# Test and results
-test_results/
-workload_results/
+# Results and outputs
 privacy_results/
 sensitivity_results/
 performance_results/
+backup_results/
+*.png
+*.json
 *.log
+checkpoints/
 
-# OS
+# Local configuration
+.env
+.env.local
+
+# System files
 .DS_Store
 Thumbs.db
