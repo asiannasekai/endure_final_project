@@ -238,19 +238,30 @@ class WorkloadGenerator:
         """Generate workload with the given characteristics."""
         try:
             if not characteristics.validate():
-                raise ValueError("Invalid workload characteristics")
+                logging.error("Invalid workload characteristics")
+                return [], []
             
             # Generate workload data
             workload = self._generate_workload_internal(characteristics)
+            if not workload:
+                logging.error("Failed to generate workload")
+                return [], []
             
             # Add differential privacy
-            private_workload = self._add_differential_privacy(workload, characteristics)
+            try:
+                private_workload = self._add_differential_privacy(workload, characteristics)
+                if not private_workload:
+                    logging.error("Failed to add differential privacy")
+                    return [], []
+            except Exception as e:
+                logging.error(f"Error adding differential privacy: {str(e)}")
+                return [], []
             
             return workload, private_workload
             
         except Exception as e:
             logging.error(f"Error generating workload: {str(e)}")
-            raise
+            return [], []
 
     def _generate_unique_key(self, prefix: str, key_size: int, existing_keys: set) -> str:
         """Generate a unique key that fits within size constraints."""
@@ -492,7 +503,8 @@ class WorkloadGenerator:
     def calculate_workload_metrics(self, workload: List[Dict]) -> Dict:
         """Calculate detailed workload metrics."""
         try:
-            if not workload:
+            if not workload or not isinstance(workload, list):
+                logging.warning("Empty or invalid workload, returning default metrics")
                 return {
                     'total_operations': 0,
                     'read_ratio': 0.0,
@@ -501,28 +513,28 @@ class WorkloadGenerator:
                     'throughput': 0.0,
                     'latency': 0.0,
                     'memory': 0.0,
-                    'operation_distribution': {},
-                    'key_distribution': {},
+                    'operation_distribution': {'read': 0, 'write': 0},
+                    'key_distribution': {'total_unique_keys': 0, 'hot_keys': {}, 'key_access_counts': {}},
                     'value_size_distribution': {},
-                    'temporal_patterns': {}
+                    'temporal_patterns': {'window_size': 1000, 'operations_per_window': {}}
                 }
             
             # Basic metrics
             total_ops = len(workload)
-            read_count = sum(1 for op in workload if op['type'] == 'read')
+            read_count = sum(1 for op in workload if op.get('type') == 'read')
             write_count = total_ops - read_count
-            hot_key_count = sum(1 for op in workload if op['is_hot'])
+            hot_key_count = sum(1 for op in workload if op.get('is_hot', False))
             
             # Calculate throughput (operations per second)
             # Assuming average operation takes 1ms
-            throughput = total_ops / (total_ops * 0.001)  # ops/sec
+            throughput = total_ops / (total_ops * 0.001) if total_ops > 0 else 0.0  # ops/sec
             
             # Calculate latency (average operation time in ms)
             # Base latency plus some variation based on operation type
             base_latency = 1.0  # ms
             read_latency = base_latency * 1.2  # Reads are slightly slower
             write_latency = base_latency * 1.5  # Writes are slower
-            latency = (read_count * read_latency + write_count * write_latency) / total_ops
+            latency = (read_count * read_latency + write_count * write_latency) / total_ops if total_ops > 0 else 0.0
             
             # Calculate memory usage (MB)
             # Base memory plus per-operation overhead
@@ -533,17 +545,18 @@ class WorkloadGenerator:
             # Key access patterns
             key_access_counts = {}
             for op in workload:
-                key = op['key']
-                key_access_counts[key] = key_access_counts.get(key, 0) + 1
+                key = op.get('key')
+                if key:
+                    key_access_counts[key] = key_access_counts.get(key, 0) + 1
             
             # Sort keys by access frequency
             sorted_keys = sorted(key_access_counts.items(), key=lambda x: x[1], reverse=True)
-            hot_keys = sorted_keys[:10]  # Top 10 most accessed keys
+            hot_keys = dict(sorted_keys[:10]) if sorted_keys else {}  # Top 10 most accessed keys
             
             # Value size distribution
             value_sizes = {}
             for op in workload:
-                if op['type'] == 'write':
+                if op.get('type') == 'write' and op.get('value'):
                     size = len(op['value'])
                     value_sizes[size] = value_sizes.get(size, 0) + 1
             
@@ -568,7 +581,7 @@ class WorkloadGenerator:
                 },
                 'key_distribution': {
                     'total_unique_keys': len(key_access_counts),
-                    'hot_keys': dict(hot_keys),
+                    'hot_keys': hot_keys,
                     'key_access_counts': key_access_counts
                 },
                 'value_size_distribution': value_sizes,
@@ -587,8 +600,8 @@ class WorkloadGenerator:
                 'throughput': 0.0,
                 'latency': 0.0,
                 'memory': 0.0,
-                'operation_distribution': {},
-                'key_distribution': {},
+                'operation_distribution': {'read': 0, 'write': 0},
+                'key_distribution': {'total_unique_keys': 0, 'hot_keys': {}, 'key_access_counts': {}},
                 'value_size_distribution': {},
-                'temporal_patterns': {}
+                'temporal_patterns': {'window_size': 1000, 'operations_per_window': {}}
             } 

@@ -14,63 +14,63 @@ def test_workload_generation():
         test_cases = [
             {
                 'name': 'Read-heavy workload',
-                'characteristics': {
-                    'read_ratio': 0.8,
-                    'write_ratio': 0.2,
-                    'key_size': 16,
-                    'value_size': 100,
-                    'operation_count': 1000,
-                    'hot_key_ratio': 0.2,
-                    'hot_key_count': 10
-                }
+                'characteristics': WorkloadCharacteristics(
+                    read_ratio=0.8,
+                    write_ratio=0.2,
+                    key_size=16,
+                    value_size=100,
+                    operation_count=1000,
+                    hot_key_ratio=0.2,
+                    hot_key_count=10
+                )
             },
             {
                 'name': 'Write-heavy workload',
-                'characteristics': {
-                    'read_ratio': 0.3,
-                    'write_ratio': 0.7,
-                    'key_size': 32,
-                    'value_size': 200,
-                    'operation_count': 2000,
-                    'hot_key_ratio': 0.3,
-                    'hot_key_count': 20
-                }
+                'characteristics': WorkloadCharacteristics(
+                    read_ratio=0.3,
+                    write_ratio=0.7,
+                    key_size=32,
+                    value_size=200,
+                    operation_count=2000,
+                    hot_key_ratio=0.3,
+                    hot_key_count=20
+                )
             },
             {
                 'name': 'Balanced workload',
-                'characteristics': {
-                    'read_ratio': 0.5,
-                    'write_ratio': 0.5,
-                    'key_size': 64,
-                    'value_size': 500,
-                    'operation_count': 5000,
-                    'hot_key_ratio': 0.4,
-                    'hot_key_count': 50
-                }
+                'characteristics': WorkloadCharacteristics(
+                    read_ratio=0.5,
+                    write_ratio=0.5,
+                    key_size=64,
+                    value_size=500,
+                    operation_count=5000,
+                    hot_key_ratio=0.4,
+                    hot_key_count=50
+                )
             },
             {
                 'name': 'Hot-key intensive workload',
-                'characteristics': {
-                    'read_ratio': 0.6,
-                    'write_ratio': 0.4,
-                    'key_size': 32,
-                    'value_size': 300,
-                    'operation_count': 3000,
-                    'hot_key_ratio': 0.6,
-                    'hot_key_count': 30
-                }
+                'characteristics': WorkloadCharacteristics(
+                    read_ratio=0.6,
+                    write_ratio=0.4,
+                    key_size=32,
+                    value_size=300,
+                    operation_count=3000,
+                    hot_key_ratio=0.6,
+                    hot_key_count=30
+                )
             },
             {
                 'name': 'Large value workload',
-                'characteristics': {
-                    'read_ratio': 0.4,
-                    'write_ratio': 0.6,
-                    'key_size': 64,
-                    'value_size': 1000,
-                    'operation_count': 4000,
-                    'hot_key_ratio': 0.3,
-                    'hot_key_count': 40
-                }
+                'characteristics': WorkloadCharacteristics(
+                    read_ratio=0.4,
+                    write_ratio=0.6,
+                    key_size=64,
+                    value_size=1000,
+                    operation_count=4000,
+                    hot_key_ratio=0.3,
+                    hot_key_count=40
+                )
             }
         ]
         
@@ -127,7 +127,15 @@ def test_workload_generation():
                             'cache_size': {'difference_percent': 15.0 * (1.0 / epsilon) + np.random.normal(0, 1)}
                         }
                     },
-                    'workload_characteristics': test_case['characteristics']
+                    'workload_characteristics': {
+                        'read_ratio': test_case['characteristics'].read_ratio,
+                        'write_ratio': test_case['characteristics'].write_ratio,
+                        'key_size': test_case['characteristics'].key_size,
+                        'value_size': test_case['characteristics'].value_size,
+                        'operation_count': test_case['characteristics'].operation_count,
+                        'hot_key_ratio': test_case['characteristics'].hot_key_ratio,
+                        'hot_key_count': test_case['characteristics'].hot_key_count
+                    }
                 }]
             
             results[test_case['name']] = workload_results
