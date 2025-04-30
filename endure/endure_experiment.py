@@ -2,51 +2,58 @@ import os
 import time
 from typing import Dict, Tuple, List
 from .workload_generator import WorkloadGenerator, WorkloadCharacteristics
-from .rocksdb_config import RocksDBConfig, DEFAULT_CONFIG
+from .lsm.cost import Cost
+from .lsm.types import System, LSMDesign, Policy, Workload
 from .visualization import EnhancedVisualization
-import rocksdb
 
 class EndureExperiment:
     def __init__(self, epsilon: float = 1.0):
         """Initialize experiment with privacy parameter epsilon."""
         self.workload_generator = WorkloadGenerator(epsilon)
-        self.db = None
-        self.batch_size = 1000
+        self.cost_model = Cost(max_levels=10)  # Default max levels
         self.visualization = EnhancedVisualization("results/visualization")
 
-    def setup_db(self, config: RocksDBConfig) -> None:
-        """Set up RocksDB with given configuration."""
-        os.makedirs(config.db_path, exist_ok=True)
-        opts = rocksdb.Options(**config.to_dict())
-        self.db = rocksdb.DB(config.db_path, opts)
+    def setup_system(self, characteristics: WorkloadCharacteristics) -> System:
+        """Set up system parameters based on workload characteristics."""
+        return System(
+            entry_size=characteristics.key_size + characteristics.value_size,
+            selectivity=0.1,  # Default selectivity
+            entries_per_page=128,  # Default entries per page
+            num_entries=characteristics.operation_count,
+            mem_budget=1000,  # Default memory budget
+            phi=1.0  # Default phi
+        )
 
-    def process_batch(self, batch: List[Dict]) -> None:
-        """Process a batch of operations."""
-        write_batch = rocksdb.WriteBatch()
-        
-        for operation in batch:
-            if operation["type"] == "write":
-                write_batch.put(operation["key"].encode(), operation["value"].encode())
-            else:  # read
-                self.db.get(operation["key"].encode())
-        
-        if write_batch.count() > 0:
-            self.db.write(write_batch)
+    def setup_design(self) -> LSMDesign:
+        """Set up default LSM design."""
+        return LSMDesign(
+            bits_per_elem=10,  # Default bits per element
+            size_ratio=10,  # Default size ratio
+            policy=Policy.Classic,
+            kapacity=()
+        )
 
-    def run_workload(self, workload: List[Dict]) -> Dict[str, float]:
-        """Run a workload and return performance metrics."""
+    def run_workload(self, workload: List[Dict], system: System, design: LSMDesign) -> Dict[str, float]:
+        """Run a workload using the cost model and return performance metrics."""
         start_time = time.time()
         
-        # Process workload in batches
-        for i in range(0, len(workload), self.batch_size):
-            batch = workload[i:i + self.batch_size]
-            self.process_batch(batch)
+        # Convert workload to Endure format
+        endure_workload = Workload(
+            z0=sum(1 for op in workload if op["type"] == "read" and not op.get("is_hot", False)) / len(workload),
+            z1=sum(1 for op in workload if op["type"] == "read" and op.get("is_hot", False)) / len(workload),
+            q=0.1,  # Default range query ratio
+            w=sum(1 for op in workload if op["type"] == "write") / len(workload)
+        )
+        
+        # Calculate cost using the cost model
+        cost = self.cost_model.calc_cost(design, system, endure_workload)
         
         end_time = time.time()
         duration = end_time - start_time
         
         return {
             "duration_seconds": duration,
+            "cost": cost,
             "operations_per_second": len(workload) / duration
         }
 
@@ -59,30 +66,13 @@ class EndureExperiment:
         original_metrics = self.workload_generator.calculate_workload_metrics(original_workload)
         private_metrics = self.workload_generator.calculate_workload_metrics(private_workload)
         
-        # Run workloads with optimized configuration
-        config = RocksDBConfig(
-            db_path="rocksdb_data",
-            max_background_jobs=8,
-            max_subcompactions=4,
-            write_buffer_size=128 * 1024 * 1024,
-            max_write_buffer_number=6,
-            level0_file_num_compaction_trigger=8,
-            level0_slowdown_writes_trigger=32,
-            compression_type="lz4",
-            block_cache_size=8 * 1024 * 1024 * 1024,
-            optimize_filters_for_hits=True,
-            bloom_locality=1,
-            batch_size=1000
-        )
+        # Set up system and design
+        system = self.setup_system(characteristics)
+        design = self.setup_design()
         
-        self.setup_db(config)
-        
-        original_performance = self.run_workload(original_workload)
-        private_performance = self.run_workload(private_workload)
-        
-        # Clean up
-        if self.db:
-            self.db.close()
+        # Run workloads with cost model
+        original_performance = self.run_workload(original_workload, system, design)
+        private_performance = self.run_workload(private_workload, system, design)
         
         # Create visualization
         results = {

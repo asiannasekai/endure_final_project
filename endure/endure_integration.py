@@ -1,10 +1,10 @@
 from typing import Dict, List, Tuple
 from .workload_generator import WorkloadGenerator, WorkloadCharacteristics
-from .rocksdb_config import RocksDBConfig
+from .lsm.cost import Cost
+from .lsm.types import System, LSMDesign, Policy, Workload
 import numpy as np
 import json
 import os
-import rocksdb
 import time
 
 class EndureIntegration:
@@ -12,6 +12,7 @@ class EndureIntegration:
         """Initialize integration with privacy parameter epsilon."""
         self.workload_generator = WorkloadGenerator(epsilon)
         self.workload_cache = {}  # Cache for generated workloads
+        self.cost_model = Cost(max_levels=10)  # Default max levels
 
     def generate_workload_trace(self, characteristics: WorkloadCharacteristics) -> Tuple[str, str]:
         """Generate workload traces for both original and private workloads."""
@@ -59,76 +60,53 @@ class EndureIntegration:
         with open(trace_path, 'r') as f:
             workload = json.load(f)
         
-        # Create RocksDB configuration
-        config = RocksDBConfig(
-            db_path=f"rocksdb_data_{os.path.basename(trace_path)}",
-            max_background_jobs=16,  # Increased for better parallelism
-            max_subcompactions=8,    # Increased for better parallelism
-            write_buffer_size=256 * 1024 * 1024,  # Increased buffer size
-            max_write_buffer_number=8,  # Increased for better write performance
-            level0_file_num_compaction_trigger=8,
-            level0_slowdown_writes_trigger=32,
-            compression_type="lz4",
-            block_cache_size=16 * 1024 * 1024 * 1024,  # Increased cache size
-            optimize_filters_for_hits=True,
-            bloom_locality=1,
-            batch_size=10000  # Increased batch size
+        # Create system parameters
+        system = System(
+            entry_size=1024,  # Default entry size
+            selectivity=0.1,  # Default selectivity
+            entries_per_page=128,  # Default entries per page
+            num_entries=len(workload),
+            mem_budget=1000,  # Default memory budget
+            phi=1.0  # Default phi
         )
         
-        # Set up database
-        os.makedirs(config.db_path, exist_ok=True)
-        opts = rocksdb.Options(**config.to_dict())
-        db = rocksdb.DB(config.db_path, opts)
+        # Create LSM design
+        design = LSMDesign(
+            bits_per_elem=10,  # Default bits per element
+            size_ratio=10,  # Default size ratio
+            policy=Policy.Classic,
+            kapacity=()
+        )
         
-        # Run workload
+        # Convert workload to Endure format
+        endure_workload = Workload(
+            z0=sum(1 for op in workload if op["operation"] == "GET" and not op.get("is_hot", False)) / len(workload),
+            z1=sum(1 for op in workload if op["operation"] == "GET" and op.get("is_hot", False)) / len(workload),
+            q=0.1,  # Default range query ratio
+            w=sum(1 for op in workload if op["operation"] == "PUT") / len(workload)
+        )
+        
+        # Calculate cost using the cost model
         start_time = time.time()
-        total_operations = len(workload)
-        batch_size = 10000  # Process in larger batches
-        
-        # Pre-allocate write batches
-        write_batches = []
-        current_batch = rocksdb.WriteBatch()
-        current_batch_size = 0
-        
-        for op in workload:
-            if op["operation"] == "PUT":
-                current_batch.put(op["key"].encode(), op["value"].encode())
-                current_batch_size += 1
-            else:  # GET
-                db.get(op["key"].encode())
-            
-            if current_batch_size >= batch_size:
-                write_batches.append(current_batch)
-                current_batch = rocksdb.WriteBatch()
-                current_batch_size = 0
-        
-        if current_batch_size > 0:
-            write_batches.append(current_batch)
-        
-        # Write all batches
-        for batch in write_batches:
-            db.write(batch)
-        
+        cost = self.cost_model.calc_cost(design, system, endure_workload)
         end_time = time.time()
         duration = end_time - start_time
         
         # Calculate performance metrics
-        throughput = total_operations / duration
-        latency = duration / total_operations * 1000  # Convert to milliseconds
-        
-        # Get space amplification
-        stats = db.get_property(b"rocksdb.stats")
-        space_amplification = float(stats.split(b"Space amplification: ")[1].split(b"\n")[0])
-        
-        # Clean up
-        db.close()
+        throughput = len(workload) / duration
+        latency = duration / len(workload) * 1000  # Convert to milliseconds
         
         return {
-            "config": config.to_dict(),
+            "config": {
+                "bits_per_elem": design.bits_per_elem,
+                "size_ratio": design.size_ratio,
+                "policy": design.policy.name,
+                "kapacity": design.kapacity
+            },
             "performance_metrics": {
                 "throughput": throughput,
                 "latency": latency,
-                "space_amplification": space_amplification
+                "cost": cost
             }
         }
 

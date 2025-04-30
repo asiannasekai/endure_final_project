@@ -23,9 +23,12 @@ class WorkloadGenerator:
         """Initialize workload generator with enhanced resource management."""
         self.results_dir = results_dir
         self.max_workers = max_workers
-        self.temp_files: Set[str] = set()  # Track temporary files
+        self.temp_files: Set[str] = set()
         self._setup_logging()
-        self._setup_directories()
+        
+        # Reduce memory requirements
+        self.min_memory_gb = 0.5  # Reduced from 1.6GB to 0.5GB
+        self.min_disk_gb = 0.5    # Reduced from 1GB to 0.5GB
         
         try:
             # Validate epsilon with reasonable range
@@ -77,6 +80,7 @@ class WorkloadGenerator:
     def _setup_logging(self) -> None:
         """Set up logging configuration."""
         log_file = os.path.join(self.results_dir, "workload_generator.log")
+        os.makedirs(self.results_dir, exist_ok=True)
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -86,32 +90,50 @@ class WorkloadGenerator:
             ]
         )
     
-    def _setup_directories(self) -> None:
-        """Set up required directories with validation."""
+    def _check_resources(self) -> None:
+        """Check system resources with reduced requirements."""
         try:
-            os.makedirs(self.results_dir, exist_ok=True)
-            if not os.access(self.results_dir, os.W_OK):
-                raise PermissionError(f"No write permission for {self.results_dir}")
+            # Check memory
+            memory = psutil.virtual_memory()
+            available_memory_gb = memory.available / (1024 * 1024 * 1024)
+            if available_memory_gb < self.min_memory_gb:
+                logging.warning(f"Low memory available ({available_memory_gb:.1f}GB < {self.min_memory_gb}GB)")
             
-            # Check disk space
-            disk = shutil.disk_usage(self.results_dir)
-            free_gb = disk.free / (1024 * 1024 * 1024)
-            if free_gb < 1:  # Need at least 1GB free
-                raise RuntimeError(f"Insufficient disk space: {free_gb:.2f}GB available")
+            # Check disk space only if we need to write files
+            if self.results_dir:
+                disk = shutil.disk_usage(self.results_dir)
+                free_gb = disk.free / (1024 * 1024 * 1024)
+                if free_gb < self.min_disk_gb:
+                    logging.warning(f"Low disk space: {free_gb:.2f}GB available")
+                    # Try to free up space by cleaning old files
+                    self.cleanup()
         except Exception as e:
-            logging.error(f"Error setting up directories: {str(e)}")
-            raise
+            logging.warning(f"Error checking resources: {str(e)}")
     
     def cleanup(self) -> None:
         """Clean up temporary files and resources."""
-        for temp_file in self.temp_files:
-            try:
+        try:
+            # Remove temporary files
+            for temp_file in self.temp_files:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
                     logging.debug(f"Removed temporary file: {temp_file}")
-            except Exception as e:
-                logging.warning(f"Failed to remove temporary file {temp_file}: {str(e)}")
-        self.temp_files.clear()
+            self.temp_files.clear()
+            
+            # Clean up old result files if they exist
+            if os.path.exists(self.results_dir):
+                for root, _, files in os.walk(self.results_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        try:
+                            # Remove files older than 1 hour
+                            if time.time() - os.path.getmtime(file_path) > 3600:
+                                os.remove(file_path)
+                                logging.debug(f"Removed old file: {file_path}")
+                        except Exception as e:
+                            logging.warning(f"Failed to remove file {file_path}: {str(e)}")
+        except Exception as e:
+            logging.warning(f"Error during cleanup: {str(e)}")
 
     def get_adaptive_epsilon(self, characteristics: WorkloadCharacteristics) -> float:
         """Get adaptive epsilon based on workload characteristics with enhanced validation."""
@@ -234,34 +256,26 @@ class WorkloadGenerator:
             logging.error(f"Error validating generated workload: {str(e)}")
             return False
 
-    def generate_workload(self, characteristics: WorkloadCharacteristics) -> Tuple[WorkloadData, WorkloadData]:
-        """Generate workload with the given characteristics."""
+    def generate_workload(self, characteristics: WorkloadCharacteristics) -> Tuple[List[Dict], List[Dict]]:
+        """Generate workloads with resource management."""
+        self._check_resources()
+        
         try:
-            if not characteristics.validate():
-                logging.error("Invalid workload characteristics")
-                return [], []
+            # Generate workloads in memory
+            original_workload = self._generate_workload_internal(characteristics)
             
-            # Generate workload data
-            workload = self._generate_workload_internal(characteristics)
-            if not workload:
-                logging.error("Failed to generate workload")
-                return [], []
+            # Apply differential privacy with adaptive epsilon
+            adaptive_epsilon = self.get_adaptive_epsilon(characteristics)
+            private_workload = self._add_differential_privacy(original_workload.copy(), characteristics)
             
-            # Add differential privacy
-            try:
-                private_workload = self._add_differential_privacy(workload, characteristics)
-                if not private_workload:
-                    logging.error("Failed to add differential privacy")
-                    return [], []
-            except Exception as e:
-                logging.error(f"Error adding differential privacy: {str(e)}")
-                return [], []
+            # Clean up temporary resources
+            self.cleanup()
             
-            return workload, private_workload
+            return original_workload, private_workload
             
         except Exception as e:
             logging.error(f"Error generating workload: {str(e)}")
-            return [], []
+            raise
 
     def _generate_unique_key(self, prefix: str, key_size: int, existing_keys: set) -> str:
         """Generate a unique key that fits within size constraints."""

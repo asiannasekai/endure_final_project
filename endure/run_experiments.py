@@ -1,121 +1,111 @@
 import os
 import time
-import rocksdb
-from typing import Dict, Any
-from .rocksdb_config import (
-    RocksDBConfig, DEFAULT_CONFIG, DEFAULT_PERTURBED_1, DEFAULT_PERTURBED_2,
-    WRITE_INTENSIVE_CONFIG, WRITE_INTENSIVE_PERTURBED_1, WRITE_INTENSIVE_PERTURBED_2,
-    READ_INTENSIVE_CONFIG, READ_INTENSIVE_PERTURBED_1, READ_INTENSIVE_PERTURBED_2,
-    BALANCED_CONFIG, BALANCED_PERTURBED_1, BALANCED_PERTURBED_2
-)
+from typing import Dict, Any, List
+from .lsm.cost import Cost
+from .lsm.types import System, LSMDesign, Policy, Workload
 
-def setup_db(config: RocksDBConfig) -> rocksdb.DB:
-    """Set up a RocksDB instance with the given configuration."""
-    # Create directory if it doesn't exist
-    os.makedirs(config.db_path, exist_ok=True)
-    
-    # Convert config to RocksDB options
-    opts = rocksdb.Options(**config.to_dict())
-    
-    # Open the database
-    return rocksdb.DB(config.db_path, opts)
+def setup_system(characteristics: Dict[str, Any]) -> System:
+    """Set up system parameters based on workload characteristics."""
+    return System(
+        entry_size=characteristics.get("key_size", 16) + characteristics.get("value_size", 100),
+        selectivity=0.1,  # Default selectivity
+        entries_per_page=128,  # Default entries per page
+        num_entries=characteristics.get("operation_count", 1000),
+        mem_budget=1000,  # Default memory budget
+        phi=1.0  # Default phi
+    )
 
-def run_write_experiment(db: rocksdb.DB, num_entries: int, key_size: int = 16, value_size: int = 100) -> Dict[str, Any]:
+def setup_design() -> LSMDesign:
+    """Set up default LSM design."""
+    return LSMDesign(
+        bits_per_elem=10,  # Default bits per element
+        size_ratio=10,  # Default size ratio
+        policy=Policy.Classic,
+        kapacity=()
+    )
+
+def run_write_experiment(workload: List[Dict], system: System, design: LSMDesign) -> Dict[str, Any]:
     """Run a write experiment and return metrics."""
     start_time = time.time()
     
-    # Write entries
-    for i in range(num_entries):
-        key = f"key_{i:016d}".encode()
-        value = b"x" * value_size
-        db.put(key, value)
+    # Convert workload to Endure format
+    endure_workload = Workload(
+        z0=0.0,  # No empty reads
+        z1=0.0,  # No non-empty reads
+        q=0.0,  # No range queries
+        w=1.0  # All writes
+    )
+    
+    # Calculate cost using the cost model
+    cost = Cost(max_levels=10).calc_cost(design, system, endure_workload)
     
     end_time = time.time()
     duration = end_time - start_time
-    write_rate = num_entries / duration
     
     return {
-        "total_entries": num_entries,
+        "total_entries": len(workload),
         "duration_seconds": duration,
-        "write_rate_ops_per_second": write_rate,
-        "key_size_bytes": key_size,
-        "value_size_bytes": value_size
+        "cost": cost,
+        "write_rate_ops_per_second": len(workload) / duration
     }
 
-def run_read_experiment(db: rocksdb.DB, num_entries: int) -> Dict[str, Any]:
+def run_read_experiment(workload: List[Dict], system: System, design: LSMDesign) -> Dict[str, Any]:
     """Run a read experiment and return metrics."""
     start_time = time.time()
     
-    # Read entries
-    for i in range(num_entries):
-        key = f"key_{i:016d}".encode()
-        db.get(key)
+    # Convert workload to Endure format
+    endure_workload = Workload(
+        z0=0.5,  # Half empty reads
+        z1=0.5,  # Half non-empty reads
+        q=0.0,  # No range queries
+        w=0.0  # No writes
+    )
+    
+    # Calculate cost using the cost model
+    cost = Cost(max_levels=10).calc_cost(design, system, endure_workload)
     
     end_time = time.time()
     duration = end_time - start_time
-    read_rate = num_entries / duration
     
     return {
-        "total_entries": num_entries,
+        "total_entries": len(workload),
         "duration_seconds": duration,
-        "read_rate_ops_per_second": read_rate
+        "cost": cost,
+        "read_rate_ops_per_second": len(workload) / duration
     }
 
-def main():
-    # Experiment configurations
-    configs = {
-        "default": DEFAULT_CONFIG,
-        "default_perturbed_1": DEFAULT_PERTURBED_1,
-        "default_perturbed_2": DEFAULT_PERTURBED_2,
-        "write_intensive": WRITE_INTENSIVE_CONFIG,
-        "write_intensive_perturbed_1": WRITE_INTENSIVE_PERTURBED_1,
-        "write_intensive_perturbed_2": WRITE_INTENSIVE_PERTURBED_2,
-        "read_intensive": READ_INTENSIVE_CONFIG,
-        "read_intensive_perturbed_1": READ_INTENSIVE_PERTURBED_1,
-        "read_intensive_perturbed_2": READ_INTENSIVE_PERTURBED_2,
-        "balanced": BALANCED_CONFIG,
-        "balanced_perturbed_1": BALANCED_PERTURBED_1,
-        "balanced_perturbed_2": BALANCED_PERTURBED_2
-    }
-    
-    # Experiment parameters
-    num_entries = 1_000_000
+def run_experiments(characteristics: Dict[str, Any]) -> Dict[str, Any]:
+    """Run experiments with different configurations."""
     results = {}
+    num_entries = characteristics.get("operation_count", 1000)
     
-    # Run experiments for each configuration
-    for config_name, config in configs.items():
-        print(f"\nRunning experiments for {config_name} configuration...")
-        print(f"Configuration details:")
-        print(f"  write_buffer_size: {config.write_buffer_size / (1024*1024)}MB")
-        print(f"  max_write_buffer_number: {config.max_write_buffer_number}")
-        print(f"  level0_file_num_compaction_trigger: {config.level0_file_num_compaction_trigger}")
-        if hasattr(config, 'optimize_filters_for_hits'):
-            print(f"  optimize_filters_for_hits: {config.optimize_filters_for_hits}")
-        if hasattr(config, 'bloom_locality'):
-            print(f"  bloom_locality: {config.bloom_locality}")
-        
-        # Set up database
-        db = setup_db(config)
-        
-        # Run write experiment
-        write_results = run_write_experiment(db, num_entries)
-        print(f"Write results for {config_name}:")
-        print(f"  Write rate: {write_results['write_rate_ops_per_second']:.2f} ops/sec")
-        
-        # Run read experiment
-        read_results = run_read_experiment(db, num_entries)
-        print(f"Read results for {config_name}:")
-        print(f"  Read rate: {read_results['read_rate_ops_per_second']:.2f} ops/sec")
-        
-        # Store results
-        results[config_name] = {
-            "write": write_results,
-            "read": read_results,
-            "config": config.to_dict()
+    # Set up system and design
+    system = setup_system(characteristics)
+    design = setup_design()
+    
+    # Run write experiment
+    write_results = run_write_experiment([{"type": "write", "key": f"key_{i}", "value": "x" * 100} for i in range(num_entries)], system, design)
+    print(f"Write results:")
+    print(f"  Write rate: {write_results['write_rate_ops_per_second']:.2f} ops/sec")
+    print(f"  Cost: {write_results['cost']:.2f}")
+    
+    # Run read experiment
+    read_results = run_read_experiment([{"type": "read", "key": f"key_{i}"} for i in range(num_entries)], system, design)
+    print(f"Read results:")
+    print(f"  Read rate: {read_results['read_rate_ops_per_second']:.2f} ops/sec")
+    print(f"  Cost: {read_results['cost']:.2f}")
+    
+    # Store results
+    results = {
+        "write": write_results,
+        "read": read_results,
+        "config": {
+            "bits_per_elem": design.bits_per_elem,
+            "size_ratio": design.size_ratio,
+            "policy": design.policy.name,
+            "kapacity": design.kapacity
         }
-        
-        # Clean up
-        db.close()
+    }
     
     return results
 
